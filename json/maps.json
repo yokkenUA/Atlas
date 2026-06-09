@@ -1,4 +1,4 @@
-﻿{
+{
    "MapAlpineRidge":{
       "name":"Alpine Ridge",
       "type":"normal",
@@ -1343,6 +1343,14 @@
          "expedition"
       ]
     },
+   "ExpeditionLogBook_Heath":{
+      "name":"Moor of Fallen Skies",
+      "type":"unique",
+      "group":"map",
+      "tags":[
+         "expedition"
+      ]
+    },
    "ExpeditionSubArea_MedvedBoss":{
       "name":"Sprawling Jungle",
       "type":"normal",
@@ -1375,12 +1383,28 @@
          "boss", "expedition"
       ]
     },
+   "ExpeditionSubArea_BlackKnightBoss":{
+      "name":"Tomb of the Fallen Knight",
+      "type":"normal",
+      "group":"map",
+      "tags":[
+         "boss", "expedition"
+      ]
+    },
    "EndgameDoodad_MeteorCrater":{
       "name":"The Fallen Star",
       "type":"normal",
       "group":"map",
       "tags":[
          "expedition"
+      ]
+    },
+   "EndgameDoodad_BeastGroundZero":{
+      "name":"The Chained Beast",
+      "type":"normal",
+      "group":"map",
+      "tags":[
+         "boss", "expedition"
       ]
     }
 }
