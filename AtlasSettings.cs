@@ -12,6 +12,15 @@ namespace Atlas
 
         public bool ControllerMode = false;
 
+        // When on, the plugin loads its bundled fonts (DejaVuSans + GNU Unifont fallback) into the
+        // overlay so map names in ANY language render without the user configuring a font in GH.
+        // Default on so the plugin works out-of-the-box on a vanilla GameHelper.
+        public bool UniversalFont = true;
+
+        // Client-language token used to resolve map-node display names from maps.json "translates"
+        // (e.g. "english", "russian", "korean"). Default English. Changing it re-labels nodes live.
+        public string Language = "english";
+
         public string SearchQuery = string.Empty;
         public bool DrawLinesSearchQuery = true;
         public float DrawSearchInRange = 1.3f;

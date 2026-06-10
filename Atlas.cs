@@ -63,6 +63,8 @@ namespace Atlas
         // Multiple internal ids can map to the same display name, so searching/grouping by the
         // display name highlights every variant at once; group/tags drive category highlights.
         private static readonly Dictionary<string, MapInfo> MapInfos = new(StringComparer.OrdinalIgnoreCase);
+        // Languages available in maps.json "translates" (union across entries), for the settings dropdown.
+        private static readonly List<string> AvailableLanguages = new();
 
         public static IntPtr Handle { get; set; }
         private static int _handlePid;
@@ -77,7 +79,7 @@ namespace Atlas
         {
             public IntPtr Address;
             public string InternalId;       // internal WorldArea MapId, e.g. "MapUniqueMerchant03_Beach"
-            public string MapName;          // in-game display name (falls back to InternalId), normalized
+            public string MapName;          // display name for the selected language (falls back to English name / id)
             public MapInfo MapInfo;         // maps.json classification (type/group/tags); null when unmapped
             public byte BiomeId;
             public AtlasNodeState State;
@@ -98,6 +100,7 @@ namespace Atlas
 
         public override void OnDisable()
         {
+            UniversalFont.Restore();
             CloseAndResetHandle();
         }
 
@@ -114,6 +117,9 @@ namespace Atlas
             LoadBiomeMap();
             LoadContentMap();
             LoadMaps();
+
+            if (Settings.UniversalFont)
+                UniversalFont.Apply(DllDirectory);
         }
 
         public override void SaveSettings()
@@ -177,6 +183,37 @@ namespace Atlas
         public override void DrawSettings()
         {
             #region SettingsUI
+            ImGui.SeparatorText("Font");
+            if (ImGui.Checkbox("Universal font (render map names in any language)", ref Settings.UniversalFont))
+            {
+                if (Settings.UniversalFont)
+                    UniversalFont.Apply(DllDirectory);
+                else
+                    UniversalFont.Restore();
+            }
+            ImGuiHelper.ToolTip("Loads the plugin's bundled DejaVuSans + GNU Unifont into the overlay so " +
+                "any-language map names render without configuring a font in GameHelper. Affects the whole overlay; " +
+                "turning it off restores GameHelper's configured font.");
+
+            ImGui.SeparatorText("Map name language");
+            if (ImGui.BeginCombo("Language", Settings.Language))
+            {
+                foreach (var lang in AvailableLanguages)
+                {
+                    bool selected = string.Equals(lang, Settings.Language, StringComparison.OrdinalIgnoreCase);
+                    if (ImGui.Selectable(lang, selected) && !selected)
+                    {
+                        Settings.Language = lang;
+                        nodeCache.Clear(); // force a node-cache rebuild next frame so labels re-localize live
+                    }
+                    if (selected)
+                        ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+            ImGuiHelper.ToolTip("Display language for map-node names (from maps.json 'translates'). " +
+                "Changing it re-labels nodes immediately. Map Group names are matched in the selected language.");
+
             ImGui.SeparatorText("Search Maps");
             ImGui.InputTextWithHint("Search Map", "You can search multiple maps at once using a comma separator ','", ref Settings.SearchQuery, 256);
             ImGui.SameLine();
@@ -598,6 +635,8 @@ namespace Atlas
                     if (!screenBounds.IntersectsWith(new RectangleF(bgPos.X, bgPos.Y, bgSize.X, bgSize.Y)))
                         continue;
 
+                    // Match group entries against the displayed name in the selected language: type the
+                    // name in the language you've selected and it highlights.
                     var group = Settings.MapGroups.Find(g => g.Maps.Exists(
                         m => NormalizeName(m).Equals(mapName, StringComparison.OrdinalIgnoreCase)));
 
@@ -688,8 +727,7 @@ namespace Atlas
                 {
                     Address = addr,
                     InternalId = internalId,
-                    MapName = mapInfo != null && !string.IsNullOrWhiteSpace(mapInfo.Name)
-                        ? NormalizeName(mapInfo.Name) : internalId,
+                    MapName = ResolveLocalizedName(internalId, mapInfo, Settings.Language),
                     MapInfo = mapInfo,
                     BiomeId = node.BiomeId,
                     State = node.State,
@@ -893,23 +931,34 @@ namespace Atlas
             foreach (var kv in contents)
                 if (!string.IsNullOrWhiteSpace(kv.Key) && kv.Value != null)
                     MapInfos[kv.Key] = kv.Value;
+
+            // Collect the language set for the dropdown (union of every entry's "translates" keys).
+            var langs = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var info in MapInfos.Values)
+                if (info.Translates != null)
+                    foreach (var lang in info.Translates.Keys)
+                        langs.Add(lang);
+            langs.Add("english"); // always selectable even if maps.json lacks translations
+            AvailableLanguages.Clear();
+            AvailableLanguages.AddRange(langs);
         }
 
         // Look up the maps.json entry for an internal MapId (null when unmapped).
         private static MapInfo GetMapInfo(string internalId) =>
             !string.IsNullOrWhiteSpace(internalId) && MapInfos.TryGetValue(internalId, out var info) ? info : null;
 
-        // Resolve an internal MapId to its in-game display name; falls back to the internal id
-        // (also normalized) when the map isn't in maps.json (new/unmapped nodes still show).
-        private static string ResolveDisplayName(string internalId)
+        // Localized display name for the selected language: translates[lang] → English name → internal id.
+        private static string ResolveLocalizedName(string internalId, MapInfo info, string lang)
         {
-            if (string.IsNullOrWhiteSpace(internalId))
-                return internalId;
-
-            var info = GetMapInfo(internalId);
-            return info != null && !string.IsNullOrWhiteSpace(info.Name)
-                ? NormalizeName(info.Name)
-                : internalId;
+            if (info != null)
+            {
+                if (info.Translates != null && !string.IsNullOrWhiteSpace(lang)
+                    && info.Translates.TryGetValue(lang, out var t) && !string.IsNullOrWhiteSpace(t))
+                    return NormalizeName(t);
+                if (!string.IsNullOrWhiteSpace(info.Name))
+                    return NormalizeName(info.Name);
+            }
+            return internalId;
         }
 
         private static Vector2 ComputeScalePair(in UiElementBaseOffset uiBase)

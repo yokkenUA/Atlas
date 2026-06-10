@@ -7,6 +7,7 @@
     <LangVersion>latest</LangVersion>
     <NoWarn>1701;1702;1591</NoWarn>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -34,11 +35,18 @@
     <None Update="json\maps.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="fonts\DejaVuSans.ttf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="fonts\unifont.ttf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <Target Name="CopyFiles" AfterTargets="Build">
     <Copy SourceFiles="$(OutDir)$(TargetName)$(TargetExt);$(OutDir)$(TargetName).pdb;" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(OutDir)json\biome.json;$(OutDir)json\content.json;$(OutDir)json\maps.json" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)\json" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OutDir)fonts\DejaVuSans.ttf;$(OutDir)fonts\unifont.ttf" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)\fonts" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>
