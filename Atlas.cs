@@ -513,7 +513,12 @@ namespace Atlas
                             {
                                 if (grp.Contents.Exists(c => string.Equals(c.ContentName, choice, StringComparison.OrdinalIgnoreCase)))
                                     continue;
-                                if (ImGui.Selectable(LocalizedName(choice)))
+                                // Show "Name — description" (description truncated when long); the
+                                // stable id (##choice) keeps selection independent of the shown text.
+                                var label = LocalizedName(choice);
+                                if (LocalizedDesc(choice) is { Length: > 0 } cd)
+                                    label += " — " + Truncate(cd, 60);
+                                if (ImGui.Selectable($"{label}##{choice}"))
                                     grp.Contents.Add(new ContentRouteEntry { ContentName = choice });
                             }
                             ImGui.EndCombo();
@@ -1356,6 +1361,10 @@ namespace Atlas
                 _ => false,
             };
         }
+
+        // Trim a string to maxLen characters, appending an ellipsis when it was longer.
+        private static string Truncate(string s, int maxLen)
+            => string.IsNullOrEmpty(s) || s.Length <= maxLen ? s : s[..maxLen].TrimEnd() + "…";
 
         // Display label for a route entry in the active UI language: built-in (map) entries resolve the
         // localized map name from maps.json; content entries use the localized content name.
