@@ -65,6 +65,44 @@ namespace Atlas
         private static readonly Dictionary<string, MapInfo> MapInfos = new(StringComparer.OrdinalIgnoreCase);
         // Languages available in maps.json "translates" (union across entries), for the settings dropdown.
         private static readonly List<string> AvailableLanguages = new();
+        // Class-2 (badge) content id → display name, loaded from json/mapcontent.json (generated from
+        // EndgameMapContent.tsv: id = row+100, plus special 1000=Corruption). Keyed by the low 16 bits
+        // of badge+0x188. See docs/re-findings.md §2.10.3.
+        private static readonly Dictionary<uint, string> BadgeContentNames = new();
+        // Content display-name → icon basename (the AtlasIcon/PassiveArt asset, sans extension), from
+        // mapcontent.json. Drives optional in-game-style icons; works for both badge- and token-named
+        // content since both resolve to the same EndgameMapContent names.
+        private static readonly Dictionary<string, string> NameToIcon = new(StringComparer.OrdinalIgnoreCase);
+        // Content display-name → effect description (EndgameMapContent.Description, markup-stripped),
+        // for the on-hover tooltip.
+        private static readonly Dictionary<string, string> NameToDesc = new(StringComparer.OrdinalIgnoreCase);
+        // Localized overlays for the plugin's selected language, keyed by the canonical ENGLISH name
+        // (which stays the lookup key for icons/hit-tests). Rebuilt by ApplyContentLanguage() whenever
+        // Settings.Language changes. Empty for English (falls through to the canonical name/desc).
+        private static readonly Dictionary<string, string> NameToLocalizedName = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, string> NameToLocalizedDesc = new(StringComparer.OrdinalIgnoreCase);
+        // English name → its raw localization table ({lang-token → {name,desc}}), parsed from
+        // mapcontent.json once at load; ApplyContentLanguage() slices it for the active language.
+        private static readonly Dictionary<string, Dictionary<string, LocalizedText>> ContentTranslations =
+            new(StringComparer.OrdinalIgnoreCase);
+        // Loaded icon textures, keyed by basename: (ImGui texture ptr, width, height). Zero ptr = the
+        // icons\<basename>.png file is absent (negative-cached so we don't stat it every frame).
+        private static readonly Dictionary<string, (IntPtr Ptr, int W, int H)> IconCache = new();
+
+        private sealed class MapContentEntry
+        {
+            public string Name { get; set; }
+            public string Icon { get; set; }
+            public string Desc { get; set; }
+            // lang-token (lowercase, e.g. "russian") → localized name/desc. Optional.
+            public Dictionary<string, LocalizedText> Translates { get; set; }
+        }
+
+        private sealed class LocalizedText
+        {
+            public string Name { get; set; }
+            public string Desc { get; set; }
+        }
 
         public static IntPtr Handle { get; set; }
         private static int _handlePid;
@@ -78,12 +116,18 @@ namespace Atlas
         private struct NodeData
         {
             public IntPtr Address;
+            public int ChildIndex;          // index in the atlas-panel child list (the node number used for RE/debug)
             public string InternalId;       // internal WorldArea MapId, e.g. "MapUniqueMerchant03_Beach"
             public string MapName;          // display name for the selected language (falls back to English name / id)
+            public bool Drawable;           // precomputed: MapName is non-empty and printable (avoids per-frame rune scan)
             public MapInfo MapInfo;         // maps.json classification (type/group/tags); null when unmapped
             public byte BiomeId;
             public AtlasNodeState State;
             public List<string> RawContents;
+            public int ContentCount;        // number of content markers (node[0][0] children); reliable for all nodes
+            public uint[] ContentTokens;    // raw per-node content tokens (StdVector<u32> @ element+0x350); see re-findings §2.10
+            public uint[] BadgeContentIds;  // class-2 badge content ids (badge+0x188); see re-findings §2.10.3
+            public string[] ContentNames;   // resolved + filtered + de-duped display names (precomputed in cache, not per-frame)
             public StdTuple2D<int> GridPosition;
         }
         private readonly List<NodeData> nodeCache = new();
@@ -96,6 +140,10 @@ namespace Atlas
         // Per-frame memo for GetFinalTopLeft's parent-chain reads: every atlas node shares the
         // same ancestors, so without this each node re-reads the whole chain. Cleared each frame.
         private static readonly Dictionary<IntPtr, UiElementBaseOffset> frameBaseCache = new();
+        // Per-frame memo of each parent container's accumulated top-left. Atlas nodes share one parent
+        // chain, so this is computed once per frame and every node's position becomes O(1) math off it
+        // (instead of walking the whole ancestor chain per node). Cleared each frame.
+        private static readonly Dictionary<IntPtr, Vector2> parentOffsetCache = new();
 
 
         public override void OnDisable()
@@ -116,6 +164,7 @@ namespace Atlas
             LoadMapGroups();
             LoadBiomeMap();
             LoadContentMap();
+            LoadMapContent();
             LoadMaps();
 
             if (Settings.UniversalFont)
@@ -204,6 +253,7 @@ namespace Atlas
                     if (ImGui.Selectable(lang, selected) && !selected)
                     {
                         Settings.Language = lang;
+                        ApplyContentLanguage(lang); // re-slice content name/desc overlays for the new language
                         nodeCache.Clear(); // force a node-cache rebuild next frame so labels re-localize live
                     }
                     if (selected)
@@ -237,6 +287,28 @@ namespace Atlas
             ImGui.SeparatorText("Atlas Settings");
             ImGui.Checkbox("Hide Completed Maps", ref Settings.HideCompletedMaps);
             ImGui.Checkbox("Hide Not Accessible Maps", ref Settings.HideNotAccessibleMaps);
+            ImGui.Checkbox("Show Content Count (dots)", ref Settings.ShowContentCount);
+            ImGuiHelper.ToolTip("Shows the number of content markers on each node as dots/pips (Essence/Breach/Ritual/Boss…). " +
+                "The exact content type isn't readable for non-rendered nodes, but the count is reliable for every node.");
+
+            ImGui.Checkbox("Show Content Names", ref Settings.ShowContentTokens);
+            ImGuiHelper.ToolTip("Draws per-node content names above the map name, merging both sources: the token vector " +
+                "(element+0x350, atlas/tower content) and the badge ids (badge+0x188, boss/corruption/unique content). " +
+                "Unknown tokens show as hex and unknown badge ids as #<id> for labeling.");
+
+            ImGui.Checkbox("Show Content Icons", ref Settings.ShowContentIcons);
+            ImGuiHelper.ToolTip("Draws each content as its in-game icon (from Plugins\\Atlas\\icons\\<name>.png) above the map " +
+                "name. Content without an icon file falls back to its text name when 'Show Content Names' is also on. " +
+                "Icons are suppressed on visible nodes (the game already draws them there) and shown only on hidden ones.");
+            if (Settings.ShowContentIcons)
+            {
+                ImGui.SetNextItemWidth(180);
+                ImGui.SliderFloat("Content Icon Size", ref Settings.ContentIconSize, 16f, 64f);
+            }
+
+            ImGui.Checkbox("Show Node Index (debug/RE)", ref Settings.ShowNodeIndex);
+            ImGuiHelper.ToolTip("DEBUG: draws each node's child-index (its number in the atlas-panel child list) as a badge " +
+                "to the left of the map name, so a node referenced by number is easy to locate on-screen.");
             ImGui.Checkbox("Show Biome Border", ref Settings.ShowBiomeBorder);
             if (Settings.ShowBiomeBorder)
                 if (ImGui.TreeNode("Biome Settings"))
@@ -409,6 +481,7 @@ namespace Atlas
             // Reset the per-frame parent-read memo, then rebuild the slow-changing per-node data
             // only on an interval (or when the node count changes / cache is empty).
             frameBaseCache.Clear();
+            parentOffsetCache.Clear();
             if (++cacheFrameCounter >= CacheRefreshFrames || cachedAtlasCount != atlasCount || nodeCache.Count == 0)
             {
                 this.RefreshNodeCache(atlasUi, atlasCount);
@@ -439,6 +512,12 @@ namespace Atlas
 
             float resScale = ComputeRelativeUiScale(in atlasUi.UiElementBase, Settings.BaseWidth, Settings.BaseHeight);
             float uiScale = Math.Clamp(Settings.ScaleMultiplier * resScale, 0.5f, 4.0f);
+
+            // Cursor pos + which content marker it's over this frame (filled in the node pass below);
+            // the tooltip is drawn after the FontScaleScope so its text stays at normal size.
+            var mousePos = ImGui.GetMousePos();
+            string hoverContentName = null;
+
             using (new FontScaleScope(uiScale))
             {
                 if (!Settings.ControllerMode)
@@ -471,7 +550,7 @@ namespace Atlas
                     {
                         var ub = Read<UiElementBaseOffset>(nd.Address);
                         var sc = ComputeScalePair(in ub);
-                        var tl = GetFinalTopLeft(in ub);
+                        var tl = GetLeafTopLeft(in ub);
                         var sz = new Vector2(ub.UnscaledSize.X * sc.X, ub.UnscaledSize.Y * sc.Y);
                         var center = tl + sz * 0.5f;
                         if (panelRect.Contains(center.X, center.Y))
@@ -523,15 +602,17 @@ namespace Atlas
                 // off-screen citadel/tower/search targets still get their line.
                 var screenBounds = new RectangleF(0, 0, ImGui.GetIO().DisplaySize.X, ImGui.GetIO().DisplaySize.Y);
                 screenBounds.Inflate(64f, 64f);
+                // Coarse bound (generous margin) for an early skip on the node CENTER before the costly
+                // CalcTextSize/label work; the precise screenBounds cull below still trims with the label rect.
+                var coarseBounds = new RectangleF(0, 0, ImGui.GetIO().DisplaySize.X, ImGui.GetIO().DisplaySize.Y);
+                coarseBounds.Inflate(256f, 256f);
 
                 foreach (var nd in nodeCache)
                 {
+                    if (!nd.Drawable)
+                        continue;
                     var mapName = nd.MapName;
 
-                    if (string.IsNullOrWhiteSpace(mapName))
-                        continue;
-                    if (!IsPrintableUnicode(mapName))
-                        continue;
                     if (doSearch && !searchList.Any(searchTerm => mapName.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)))
                         continue;
 
@@ -553,17 +634,23 @@ namespace Atlas
                     if (Settings.HideNotAccessibleMaps && notAccessible && !routeTarget)
                         continue;
 
-                    // Live screen position: read only the node's own UiElementBase. Its ancestors
-                    // are shared and memoized in frameBaseCache, so the parent walk in
-                    // GetFinalTopLeft costs ~nothing per node after the first.
+                    // Screen position read LIVE per frame (this atlas scrolls by moving the nodes' own
+                    // RelativePosition, so a cached leaf would make labels step/jump every cache cycle).
+                    // Read happens AFTER the cheap culls above (hidden/completed nodes never get here),
+                    // and the ancestor walk in GetLeafTopLeft is O(1) via the per-frame parentOffsetCache.
                     var uiBase = Read<UiElementBaseOffset>(nd.Address);
                     var nodeScale = ComputeScalePair(in uiBase);
-                    var nodeTopLeft = GetFinalTopLeft(in uiBase);
+                    var nodeTopLeft = GetLeafTopLeft(in uiBase);
                     var nodeSize = new Vector2(uiBase.UnscaledSize.X * nodeScale.X,
                                                uiBase.UnscaledSize.Y * nodeScale.Y);
+                    var nodeCenter = nodeTopLeft + nodeSize * 0.5f;
+
+                    // Coarse off-screen skip BEFORE CalcTextSize (the per-node hot cost). Route/search
+                    // targets draw a line even when off-screen, so they're exempt and handled below.
+                    if (!routeTarget && !coarseBounds.Contains(nodeCenter.X, nodeCenter.Y))
+                        continue;
 
                     var textSize = ImGui.CalcTextSize(mapName);
-                    var nodeCenter = nodeTopLeft + nodeSize * 0.5f;
                     Vector2 drawPosition = nodeCenter - textSize * 0.5f + Settings.AnchorNudge;
 
                     var padding = new Vector2(5, 2) * uiScale;
@@ -604,14 +691,15 @@ namespace Atlas
                                     drawList.AddCircle(startC, sr, DotOutlineColor, 0, MathF.Max(1f, sr * 0.35f));
                                 }
 
-                                // Hop count above the target node.
+                                // Hop count above the target node, drawn as the route pill "→N"
+                                // (dark pill, route-colored text matching the path line).
                                 drawList.ChannelsSetCurrent(ChannelLabels);
-                                string ht = hops.ToString();
-                                var hts = ImGui.CalcTextSize(ht);
-                                var hp = new Vector2(nodeCenter.X - hts.X * 0.5f, nodeCenter.Y - nodeSize.Y * 0.5f - hts.Y - 2f * uiScale);
-                                var hpad = new Vector2(4, 1) * uiScale;
-                                drawList.AddRectFilled(hp - hpad, hp + hts + hpad, ImGuiHelper.Color(new Vector4(0, 0, 0, 0.75f)), 3f * uiScale);
-                                drawList.AddText(hp, ImGuiHelper.Color(new Vector4(1f, 0.9f, 0.2f, 1f)), ht);
+                                string ht = "→" + hops.ToString(CultureInfo.InvariantCulture);
+                                float pillH = 18f * uiScale;
+                                float pillTopY = nodeCenter.Y - nodeSize.Y * 0.5f - pillH - 2f * uiScale;
+                                var hopBg = new Vector4(0.05f, 0.05f, 0.05f, 0.85f);
+                                var hopFg = new Vector4(1f, 0.9f, 0.2f, 1f); // bright yellow (route line itself carries the color)
+                                DrawPill(drawList, ht, nodeCenter.X, pillTopY, hopBg, hopFg, uiScale);
 
                                 drewRoute = true;
                             }
@@ -667,6 +755,40 @@ namespace Atlas
                     drawList.AddRectFilled(bgPos, bgPos + bgSize, ImGuiHelper.Color(backgroundColor), rounding);
                     drawList.AddText(drawPosition, ImGuiHelper.Color(fontColor), mapName);
 
+                    // DEBUG/RE: node child-index badge, sitting to the LEFT of the name and vertically
+                    // centered against it, so a node called out by number is easy to find on-screen.
+                    if (Settings.ShowNodeIndex)
+                    {
+                        string idxLabel = nd.ChildIndex.ToString(CultureInfo.InvariantCulture);
+                        var idxSize = ImGui.CalcTextSize(idxLabel);
+                        var ipad = new Vector2(4, 2) * uiScale;
+                        var idxBoxSize = idxSize + ipad * 2;
+                        var idxMin = new Vector2(bgPos.X - (3f * uiScale) - idxBoxSize.X,
+                            rectCenter.Y - idxBoxSize.Y * 0.5f);
+                        drawList.AddRectFilled(idxMin, idxMin + idxBoxSize,
+                            ImGuiHelper.Color(new Vector4(0.12f, 0.12f, 0.18f, 0.9f)), rounding);
+                        drawList.AddText(idxMin + ipad, ImGuiHelper.Color(new Vector4(0.55f, 0.85f, 1f, 1f)), idxLabel);
+                    }
+
+                    // Per-node content shown ABOVE the map name. Two disjoint sources merge into one
+                    // name list: the token vector (element+0x350, class-1: atlas/tower content) and the
+                    // badge ids (badge+0x188, class-2: boss/corruption/unique). Each name draws as its
+                    // in-game icon when available, else as a text chip. See re-findings §2.10.3.
+                    if ((Settings.ShowContentTokens || Settings.ShowContentIcons)
+                        && nd.ContentNames is { Length: > 0 })
+                    {
+                        // Suppress our (duplicate) icon where the game already renders the node's native
+                        // icon (IsVisible bit 0x800 set), show it only where the game isn't (fog/off-screen).
+                        // uiBase is read live this frame, so the bit is current — no pan lag.
+                        bool nodeVisible = (uiBase.Flags & IsVisibleMask) != 0;
+
+                        var hov = DrawContentRow(drawList, nd.ContentNames, DllDirectory, drawPosition, textSize, uiScale,
+                            Settings.ShowContentIcons && !nodeVisible, Settings.ShowContentTokens,
+                            Settings.ContentIconSize * uiScale, mousePos);
+                        if (hov != null)
+                            hoverContentName = hov;
+                    }
+
                     float labelCenterX = drawPosition.X + textSize.X * 0.5f;
                     float nextRowTopY = drawPosition.Y + textSize.Y + (4f * uiScale);
                     float rowGap = 4f * uiScale;
@@ -677,6 +799,9 @@ namespace Atlas
                         DrawSquares(drawList, flags, labelCenterX, ref nextRowTopY, rowGap, uiScale);
 
                     DrawSquares(drawList, contents, labelCenterX, ref nextRowTopY, rowGap, uiScale);
+
+                    if (Settings.ShowContentCount && nd.ContentCount > 0)
+                        DrawContentDots(drawList, nd.ContentCount, labelCenterX, ref nextRowTopY, rowGap, uiScale);
                 }
 
                 // "You are here" marker dot (context only — not the route start).
@@ -689,6 +814,22 @@ namespace Atlas
                 }
 
                 drawList.ChannelsMerge();
+            }
+
+            // Tooltip for the content marker under the cursor — drawn after the FontScaleScope so the
+            // text is normal-sized. ImGui tooltip windows render above the background draw list.
+            if (hoverContentName != null)
+            {
+                ImGui.BeginTooltip();
+                ImGui.TextUnformatted(LocalizedName(hoverContentName));
+                if (LocalizedDesc(hoverContentName) is { Length: > 0 } desc)
+                {
+                    ImGui.Separator();
+                    ImGui.PushTextWrapPos(ImGui.GetFontSize() * 22f);
+                    ImGui.TextUnformatted(desc);
+                    ImGui.PopTextWrapPos();
+                }
+                ImGui.EndTooltip();
             }
         }
 
@@ -723,15 +864,24 @@ namespace Atlas
                 var node = AtlasNode.Load(addr);
                 var internalId = NormalizeName(node.MapName);
                 var mapInfo = GetMapInfo(internalId);
+                var contentTokens = GetContentTokens(addr);
+                var badgeIds = GetBadgeContentIds(nodeUi);
+                var mapName = ResolveLocalizedName(internalId, mapInfo, Settings.Language);
                 nodeCache.Add(new NodeData
                 {
                     Address = addr,
+                    ChildIndex = i,
                     InternalId = internalId,
-                    MapName = ResolveLocalizedName(internalId, mapInfo, Settings.Language),
+                    MapName = mapName,
+                    Drawable = !string.IsNullOrWhiteSpace(mapName) && IsPrintableUnicode(mapName),
                     MapInfo = mapInfo,
                     BiomeId = node.BiomeId,
                     State = node.State,
                     RawContents = GetContentName(nodeUi),
+                    ContentCount = GetContentCount(nodeUi),
+                    ContentTokens = contentTokens,
+                    BadgeContentIds = badgeIds,
+                    ContentNames = BuildContentNames(contentTokens, badgeIds),
                     GridPosition = node.GridPosition,
                 });
             }
@@ -916,6 +1066,105 @@ namespace Atlas
             ApplyContentOverrides();
         }
 
+        // Load the class-2 badge content id → name table (json/mapcontent.json). Keys are the badge
+        // content id (low 16 bits of badge+0x188); generated from EndgameMapContent.tsv. See §2.10.3.
+        private void LoadMapContent()
+        {
+            BadgeContentNames.Clear();
+            NameToIcon.Clear();
+            NameToDesc.Clear();
+            ContentTranslations.Clear();
+            IconCache.Clear();
+            var path = Path.Join(DllDirectory, "json", "mapcontent.json");
+            if (!File.Exists(path))
+                return;
+
+            var contents = JsonConvert.DeserializeObject<Dictionary<string, MapContentEntry>>(File.ReadAllText(path));
+            if (contents is null)
+                return;
+
+            foreach (var kv in contents)
+            {
+                var name = kv.Value?.Name;
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+                if (uint.TryParse(kv.Key, out var id))
+                    BadgeContentNames[id] = name;
+                if (!string.IsNullOrWhiteSpace(kv.Value.Icon))
+                    NameToIcon[name] = kv.Value.Icon;
+                if (!string.IsNullOrWhiteSpace(kv.Value.Desc))
+                    NameToDesc[name] = kv.Value.Desc;
+                if (kv.Value.Translates is { Count: > 0 })
+                    ContentTranslations[name] = kv.Value.Translates;
+            }
+
+            ApplyContentLanguage(Settings?.Language);
+        }
+
+        // Rebuild the active-language overlays (NameToLocalizedName/Desc) from ContentTranslations for
+        // the language token in Settings.Language. English (or any missing token) leaves the maps empty,
+        // so display falls back to the canonical English name/desc. Called on load and on language change.
+        private static void ApplyContentLanguage(string lang)
+        {
+            NameToLocalizedName.Clear();
+            NameToLocalizedDesc.Clear();
+            if (string.IsNullOrWhiteSpace(lang) || lang.Equals("english", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            foreach (var kv in ContentTranslations)
+            {
+                if (!kv.Value.TryGetValue(lang, out var loc) || loc is null)
+                    continue;
+                if (!string.IsNullOrWhiteSpace(loc.Name))
+                    NameToLocalizedName[kv.Key] = loc.Name;
+                if (!string.IsNullOrWhiteSpace(loc.Desc))
+                    NameToLocalizedDesc[kv.Key] = loc.Desc;
+            }
+        }
+
+        // Display name/desc for a canonical English content name in the active language (English fallback).
+        private static string LocalizedName(string englishName)
+            => NameToLocalizedName.TryGetValue(englishName, out var n) ? n : englishName;
+
+        private static string LocalizedDesc(string englishName)
+            => NameToLocalizedDesc.TryGetValue(englishName, out var d) ? d
+               : (NameToDesc.TryGetValue(englishName, out var en) ? en : null);
+
+        // Lazily load (and cache) the icon texture for a content basename from icons\<basename>.png.
+        // Returns false when the file is absent (negative-cached) so the caller falls back to text.
+        private static bool TryGetIcon(string dllDir, string basename, out IntPtr ptr, out int w, out int h)
+        {
+            ptr = IntPtr.Zero; w = 0; h = 0;
+            if (string.IsNullOrEmpty(basename))
+                return false;
+
+            if (IconCache.TryGetValue(basename, out var cached))
+            {
+                ptr = cached.Ptr; w = cached.W; h = cached.H;
+                return ptr != IntPtr.Zero;
+            }
+
+            var file = Path.Join(dllDir, "icons", basename + ".png");
+            if (!File.Exists(file))
+            {
+                IconCache[basename] = (IntPtr.Zero, 0, 0);
+                return false;
+            }
+
+            try
+            {
+                Core.Overlay.AddOrGetImagePointer(file, false, out var p, out var iw, out var ih);
+                IconCache[basename] = (p, (int)iw, (int)ih);
+                ptr = p; w = (int)iw; h = (int)ih;
+                return p != IntPtr.Zero;
+            }
+            catch
+            {
+                IconCache[basename] = (IntPtr.Zero, 0, 0);
+                return false;
+            }
+        }
+
         private void LoadMaps()
         {
             var path = Path.Join(DllDirectory, "json", "maps.json");
@@ -1045,6 +1294,30 @@ namespace Atlas
             return pos;
         }
 
+        // O(1) screen top-left for a leaf whose ancestor chain is shared with other leaves: the parent
+        // container's accumulated offset is computed once per frame (parentOffsetCache) and reused, so
+        // we don't walk the whole chain for every node. Equivalent to GetFinalTopLeft(in leaf).
+        private static Vector2 GetLeafTopLeft(in UiElementBaseOffset leaf)
+        {
+            Vector2 parentOffset;
+            if (leaf.ParentPtr == IntPtr.Zero)
+            {
+                parentOffset = Vector2.Zero;
+            }
+            else if (!parentOffsetCache.TryGetValue(leaf.ParentPtr, out parentOffset))
+            {
+                var parent = ReadBaseCached(leaf.ParentPtr);
+                parentOffset = GetFinalTopLeft(in parent);
+                parentOffsetCache[leaf.ParentPtr] = parentOffset;
+            }
+
+            var scale = ComputeScalePair(in leaf);
+            var pos = parentOffset + new Vector2(leaf.RelativePosition.X * scale.X, leaf.RelativePosition.Y * scale.Y);
+            if (UiElementBaseFuncs.ShouldModifyPos(leaf.Flags))
+                pos += new Vector2(leaf.PositionModifier.X * scale.X, leaf.PositionModifier.Y * scale.Y);
+            return pos;
+        }
+
         // Per-frame-cached UiElementBase read — atlas nodes share their ancestor chain, so the
         // parent walk in GetFinalTopLeft reads each ancestor at most once per frame.
         private static UiElementBaseOffset ReadBaseCached(IntPtr addr)
@@ -1103,6 +1376,127 @@ namespace Atlas
             }
 
             nextRowTopY += fixedHeight + rowGap;
+        }
+
+        // Draw a centered rounded pill with a label. centerX/topY = top-center anchor.
+        // Returns the pill height (so callers can advance their layout cursor).
+        private static float DrawPill(ImDrawListPtr drawList, string label, float centerX, float topY,
+            Vector4 bg, Vector4 fg, float uiScale)
+        {
+            const float fixedHeightBase = 18f;
+            const float paddingBase = 8f;
+            float fixedHeight = fixedHeightBase * uiScale;
+            float padding = paddingBase * uiScale;
+
+            var textSize = ImGui.CalcTextSize(label);
+            float w = MathF.Max(fixedHeight, textSize.X + padding);
+            var boxSize = new Vector2(w, fixedHeight);
+
+            var min = new Vector2(centerX - w * 0.5f, topY);
+            drawList.AddRectFilled(min, min + boxSize, ImGuiHelper.Color(bg), 3f * uiScale);
+            var textPos = min + (boxSize - textSize) * 0.5f;
+            drawList.AddText(textPos, ImGuiHelper.Color(fg), label);
+
+            return fixedHeight;
+        }
+
+        // Draw N pips (small filled dots) = number of content markers on the node, one per content
+        // item. Reliable for every node incl. off-screen; the exact content TYPE isn't persisted by
+        // the client (rolled from a per-node seed) so only the count is shown. See re-findings §2.7.
+        private static void DrawContentDots(ImDrawListPtr drawList, int count, float centerX,
+            ref float nextRowTopY, float rowGap, float uiScale)
+        {
+            if (count <= 0)
+                return;
+
+            float radius = 3.5f * uiScale;
+            float gap = 4f * uiScale;
+            float step = radius * 2f + gap;
+            float totalW = count * (radius * 2f) + MathF.Max(0, count - 1) * gap;
+
+            float cy = nextRowTopY + radius;
+            float startX = centerX - totalW * 0.5f + radius;
+
+            var fill = ImGuiHelper.Color(new Vector4(1f, 0.78f, 0.27f, 1f));   // amber
+            var outline = ImGuiHelper.Color(new Vector4(0f, 0f, 0f, 0.85f));
+
+            for (int i = 0; i < count; i++)
+            {
+                var c = new Vector2(startX + i * step, cy);
+                drawList.AddCircleFilled(c, radius, fill);
+                drawList.AddCircle(c, radius, outline, 0, MathF.Max(1f, radius * 0.4f));
+            }
+
+            nextRowTopY += radius * 2f + rowGap;
+        }
+
+        // Draw a centered row of content markers ABOVE the map name. Each name renders as its in-game
+        // icon (icons\<basename>.png, drawn at iconH px) when showIcons is on and the texture exists;
+        // otherwise as a text chip when showNames is on (so content without an icon still appears).
+        // Mixed rows are fine; the row height is the tallest item and shorter items are centered.
+        // Reused across calls (single-threaded render) so the per-node draw path allocates nothing.
+        // display = text actually drawn (localized for chips); key = canonical English name for the
+        // icon lookup / hover-tooltip key (kept English so both stay language-independent).
+        private static readonly List<(bool isIcon, IntPtr ptr, float w, float h, string display, string key)> RowScratch = new();
+        private static string DrawContentRow(ImDrawListPtr drawList, IReadOnlyList<string> names, string dllDir,
+            Vector2 drawPosition, Vector2 textSize, float uiScale, bool showIcons, bool showNames, float iconH,
+            Vector2 mousePos)
+        {
+            var items = RowScratch;
+            items.Clear();
+
+            float sumW = 0f, maxH = 0f;
+            foreach (var n in names)
+            {
+                if (showIcons && NameToIcon.TryGetValue(n, out var basename)
+                    && TryGetIcon(dllDir, basename, out var p, out var iw, out var ih) && iw > 0 && ih > 0)
+                {
+                    float w = iconH * iw / ih;
+                    items.Add((true, p, w, iconH, null, n));
+                    sumW += w; if (iconH > maxH) maxH = iconH;
+                }
+                else if (showNames)
+                {
+                    var display = LocalizedName(n);
+                    var ts = ImGui.CalcTextSize(display);
+                    items.Add((false, IntPtr.Zero, ts.X, ts.Y, display, n));
+                    sumW += ts.X; if (ts.Y > maxH) maxH = ts.Y;
+                }
+            }
+
+            if (items.Count == 0)
+                return null;
+
+            float gap = 4f * uiScale;
+            float totalW = sumW + gap * (items.Count - 1);
+            float rowH = maxH;
+            float startX = drawPosition.X + textSize.X * 0.5f - totalW * 0.5f;
+            float topY = drawPosition.Y - rowH - 2f * uiScale;
+
+            var pad = new Vector2(3, 1) * uiScale;
+            drawList.AddRectFilled(new Vector2(startX, topY) - pad, new Vector2(startX + totalW, topY + rowH) + pad,
+                ImGuiHelper.Color(new Vector4(0f, 0f, 0f, 0.8f)), 3f * uiScale);
+
+            float x = startX;
+            string hovered = null;
+            var textColor = ImGuiHelper.Color(new Vector4(0.3f, 0.95f, 1f, 1f));
+            foreach (var it in items)
+            {
+                float y = topY + (rowH - it.h) * 0.5f;
+                if (it.isIcon)
+                    drawList.AddImage(it.ptr, new Vector2(x, y), new Vector2(x + it.w, y + it.h));
+                else
+                    drawList.AddText(new Vector2(x, y), textColor, it.display);
+
+                // Hit-test the cursor against this marker's rect (the overlay tracks the atlas-screen
+                // cursor); the hovered (English) key drives the tooltip drawn after the node pass.
+                if (mousePos.X >= x && mousePos.X <= x + it.w && mousePos.Y >= y && mousePos.Y <= y + it.h)
+                    hovered = it.key;
+
+                x += it.w + gap;
+            }
+
+            return hovered;
         }
 
         private readonly struct FontScaleScope : IDisposable
@@ -1507,6 +1901,181 @@ namespace Atlas
             }
 
             return result;
+        }
+
+        // Number of content markers on a node = children of the content container node[0][0]
+        // (each child is one badge: Essence/Breach/Ritual/Boss…). Reliable for ALL nodes incl.
+        // off-screen/hidden ones — the badge element always exists even when its icon sub-widgets
+        // aren't built. The exact content TYPE is NOT persisted (rolled from a per-node seed), so
+        // only the count is surfaced here. See docs/re-findings.md §2.7.
+        public static int GetContentCount(UiElement nodeUi)
+        {
+            nodeUi = nodeUi.GetChild(0);   // node[0]
+            nodeUi = nodeUi.GetChild(0);   // node[0][0] = content container
+            var len = nodeUi.Length;
+            return len > 0 ? len : 0;
+        }
+
+        // Per-node content token → content name. A token is a u32 = (HIGH16 weight × 0x40)
+        // | (LOW16 effect-id): high words seen are ×1=0x0040, ×2=0x0080, ×3=0x00C0, ×5=0x0140,
+        // ×10=0x0280, ×50=0x0C80, ×100=0x1900, ×1000=0xFA00 (and 0xE700 cluster, still unknown).
+        // A content is identified by its DISTINCTIVE (usually high-weight) token; low-weight ×1/×2
+        // tokens are often shared "building-block" effects (e.g. 0x..0A8C across all Azmeri content)
+        // and are intentionally left unmapped to avoid mislabeling. So we key on the FULL u32.
+        // Built empirically by visually correlating live tokens with content (re-findings §2.10.1).
+        // Tokens confirmed STABLE across game restarts. Unknown tokens fall through to hex display.
+        private static readonly Dictionary<uint, string> ContentTokenNames = new()
+        {
+            [0x00404C57] = "Powerful Map Boss",
+            [0x004067C0] = "Grand Mirror",
+            [0x0040686A] = "Delirium",
+            [0x0040686B] = "Abyss",
+            [0x0080686B] = "Abyss",                 // weight-2 variant
+            [0x0040686C] = "Ritual",
+            [0x0040686D] = "Vaal Beacons",
+            [0x0040686E] = "Breach",
+            // Atlas influence (biome) content
+            [0x004064FF] = "Water Influence",
+            [0x00406501] = "Grass Influence",
+            [0x00406502] = "Forest Influence",
+            [0x00406503] = "Swamp Influence",
+            [0x00406504] = "Desert Influence",
+            // Azmeri / Wildwood
+            [0x19006351] = "Azmeri Bloodline",
+            [0x00400890] = "Azmeri Bloodline",
+            [0x004064DF] = "Azmeri Bloodline",
+            [0xFA00610E] = "Azmeri Energisation",
+            [0x0140_0A8C] = "Swarming Spirits",
+            [0x19006630] = "Spirit Migration",
+            [0x02806631] = "Spirit Migration",
+            // Mods / modifiers
+            [0x1900634C] = "Indomitable Essence",
+            [0x00C01247] = "Indomitable Essence",
+            [0x00C05E27] = "Scattered Stones",
+            [0x00C06349] = "Power Struggle",
+            [0x1900320E] = "Arcane Hordes",
+            [0x0C8004D8] = "Affluent Armies",
+            [0x19006202] = "Rites of the Rogues",
+            [0x00800963] = "Rites of the Rogues",
+            [0x00801282] = "Corrupted Mirage",
+            [0x0040675E] = "Glimmering Mutation",
+            [0x0040153B] = "Ancient Trove",
+            [0x00400962] = "Ancient Trove",
+            // Exceptional Find (distinctive + its 0x40-band sub-tokens)
+            [0xFA00635D] = "Exceptional Find",
+            [0x00406396] = "Exceptional Find",
+            [0x00406397] = "Exceptional Find",
+            [0x00406398] = "Exceptional Find",
+            [0x00406399] = "Exceptional Find",
+            [0x004065FF] = "Exceptional Find",
+            // Known NON-content markers (mapped so they can be hidden, see render filter):
+            [0x004065F0] = "(atlas skill point)",
+            // Shared base tokens deliberately NOT mapped (ambiguous across contents):
+            //   0x00800A8C / 0x00400A8C  — Azmeri base effect (Bloodline / Energisation / Spirit Migration)
+            //   0xE700_5F0C / _5F0D / _5F0E — common cluster, still unidentified
+        };
+
+        // Resolve a content token to its display name; unknown tokens return a hex string (low 16
+        // bits when in the 0x0040 band, otherwise the full u32) so they remain visible for labeling.
+        public static string ResolveContentToken(uint token)
+        {
+            if (ContentTokenNames.TryGetValue(token, out var name))
+                return name;
+            return (token & 0xFFFF0000u) == 0x00400000u ? (token & 0xFFFF).ToString("X4") : token.ToString("X8");
+        }
+
+        // Read the per-node content tokens: the StdVector<u32> living directly on the atlas-node
+        // UiElement at element+0x350 (begin) / +0x358 (end). Stable per content type (two
+        // PowerfulMapBoss nodes give the identical vector). NOTE: populated only for VISIBLE
+        // (rendered) nodes — culled/hidden nodes carry no tokens. See docs/re-findings.md §2.10.
+        private const int ContentVecBeginOffset = 0x350;
+        private const int ContentVecEndOffset = 0x358;
+        private const int MaxContentTokens = 32;   // sanity cap (content lists are tiny)
+        public static uint[] GetContentTokens(IntPtr nodeAddr)
+        {
+            if (nodeAddr == IntPtr.Zero)
+                return System.Array.Empty<uint>();
+
+            var begin = Read<IntPtr>(IntPtr.Add(nodeAddr, ContentVecBeginOffset));
+            var end = Read<IntPtr>(IntPtr.Add(nodeAddr, ContentVecEndOffset));
+            if (begin == IntPtr.Zero || end.ToInt64() <= begin.ToInt64())
+                return System.Array.Empty<uint>();
+
+            long bytes = end.ToInt64() - begin.ToInt64();
+            int count = (int)(bytes / sizeof(uint));
+            if (count <= 0 || count > MaxContentTokens)
+                return System.Array.Empty<uint>();
+
+            var tokens = new uint[count];
+            for (int i = 0; i < count; i++)
+                tokens[i] = Read<uint>(IntPtr.Add(begin, i * sizeof(uint)));
+            return tokens;
+        }
+
+        // Read the class-2 (badge) content ids of a node: u32 at badge+0x188 for each badge child
+        // under node[0][0] (the same container GetContentCount counts). The high word is a constant
+        // 0x0002 category; the content type is the low 16 bits. Disjoint from the token vector
+        // (a node carries EITHER tokens OR badges, never both). See docs/re-findings.md §2.10.3.
+        private const int BadgeContentIdOffset = 0x188;
+        private const int MaxBadges = 16;   // sanity cap (content lists are tiny)
+        public static uint[] GetBadgeContentIds(UiElement nodeUi)
+        {
+            nodeUi = nodeUi.GetChild(0);   // node[0]
+            nodeUi = nodeUi.GetChild(0);   // node[0][0] = content container
+            var len = nodeUi.Length;
+            if (len <= 0 || len > MaxBadges)
+                return System.Array.Empty<uint>();
+
+            var ids = new uint[len];
+            for (int i = 0; i < len; i++)
+            {
+                var childAddr = nodeUi.GetChildAddress(i);
+                if (childAddr == IntPtr.Zero)
+                    continue;
+                ids[i] = Read<uint>(IntPtr.Add(childAddr, BadgeContentIdOffset));
+            }
+            return ids;
+        }
+
+        // Resolve a node's tokens + badge ids into the final, de-duped display-name list. Run ONCE per
+        // cache refresh (not per frame) so the per-frame draw path stays allocation-free. Non-content
+        // markers (names wrapped in parentheses, e.g. atlas skill point) are filtered out here.
+        private static readonly string[] NoContentNames = System.Array.Empty<string>();
+        private static string[] BuildContentNames(uint[] tokens, uint[] badges)
+        {
+            bool hasTokens = tokens is { Length: > 0 };
+            bool hasBadges = badges is { Length: > 0 };
+            if (!hasTokens && !hasBadges)
+                return NoContentNames;
+
+            var seen = new List<string>(4);
+            void Add(string s)
+            {
+                if (string.IsNullOrEmpty(s) || s[0] == '(')
+                    return;
+                if (!seen.Contains(s))
+                    seen.Add(s);
+            }
+
+            if (hasTokens)
+                foreach (var t in tokens) Add(ResolveContentToken(t));
+            if (hasBadges)
+                foreach (var b in badges) Add(ResolveBadgeContent(b));
+
+            return seen.Count == 0 ? NoContentNames : seen.ToArray();
+        }
+
+        // Resolve a badge content id to its name via mapcontent.json (keyed by the low 16 bits).
+        // Unknown ids fall through to "#<id>" so they stay visible for labeling. Returns "" for 0.
+        // Ids above 1000 (1000 = Corruption is the highest real content id) are not displayed.
+        public static string ResolveBadgeContent(uint id)
+        {
+            uint key = id & 0xFFFFu;
+            if (key == 0 || key > 1000)
+                return string.Empty;
+            if (BadgeContentNames.TryGetValue(key, out var name))
+                return name;
+            return "#" + key.ToString(CultureInfo.InvariantCulture);
         }
 
         private static ContentInfo MatchContent(string contentName,

@@ -35,6 +35,23 @@ namespace Atlas
         public bool HideNotAccessibleMaps = false;
         public bool HideFailedMaps = true;
         public bool ShowMapBadges = true;
+        // Show a small badge with the number of content markers on each node (Essence/Breach/
+        // Ritual/Boss…). The exact content TYPE is not persisted by the client for non-rendered
+        // nodes (it's rolled from a per-node seed), so only the reliable count is surfaced — it
+        // works for every node including off-screen/hidden ones. See docs/re-findings.md §2.7.
+        public bool ShowContentCount = true;
+        // DEBUG/RE: render the raw per-node content tokens (the StdVector<u32> at element+0x350)
+        // above the map name, for visually correlating tokens with known content types across maps.
+        // See docs/re-findings.md §2.10. Off by default.
+        public bool ShowContentTokens = false;
+        // Render per-node content as in-game icons (icons\<basename>.png) instead of / alongside text.
+        // Content without a loaded icon still falls back to its text name. See docs/re-findings.md §2.10.3.
+        public bool ShowContentIcons = false;
+        // Height (px, before UI scaling) of a content icon drawn above a node.
+        public float ContentIconSize = 32f;
+        // DEBUG/RE: draw the node's child-index (its number in the atlas-panel child list) as a small
+        // badge to the LEFT of the map name, so a node called out by number is easy to find on-screen.
+        public bool ShowNodeIndex = false;
         public bool ShowBiomeBorder = true;
         public float BiomeBorderThickness = 2.5f;
 
