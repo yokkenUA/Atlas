@@ -85,6 +85,9 @@ namespace Atlas
         // mapcontent.json once at load; ApplyContentLanguage() slices it for the active language.
         private static readonly Dictionary<string, Dictionary<string, LocalizedText>> ContentTranslations =
             new(StringComparer.OrdinalIgnoreCase);
+        // Player-selectable content names for the Map Content route-group editor (real content only:
+        // the DNT/hidden "[...]" placeholders are filtered out). Sorted; built in LoadMapContent.
+        private static readonly List<string> ContentChoices = new();
         // Loaded icon textures, keyed by basename: (ImGui texture ptr, width, height). Zero ptr = the
         // icons\<basename>.png file is absent (negative-cached so we don't stat it every frame).
         private static readonly Dictionary<string, (IntPtr Ptr, int W, int H)> IconCache = new();
@@ -166,6 +169,7 @@ namespace Atlas
             LoadContentMap();
             LoadMapContent();
             LoadMaps();
+            EnsureBuiltInContentGroup();
 
             if (Settings.UniversalFont)
                 UniversalFont.Apply(DllDirectory);
@@ -269,46 +273,25 @@ namespace Atlas
             ImGui.SameLine();
             if (ImGui.SmallButton("Clear"))
                 Settings.SearchQuery = string.Empty;
+            // Search routing is always on now (the old "Draw Lines to Search in range" toggle is hidden);
+            // a non-empty Search query draws routes to the matching maps within range.
+            Settings.DrawLinesSearchQuery = true;
             if (ImGui.TreeNode("Draw Lines Settings"))
             {
-                ImGui.Checkbox("Route Lines Through Nodes (Shortest Path)", ref Settings.RouteLinesThroughNodes);
+                ImGui.Checkbox("Shortest Path", ref Settings.RouteLinesThroughNodes);
+                ImGuiHelper.ToolTip("Route lines follow the shortest hop-path through the revealed atlas edges " +
+                    "(from the nearest accessible node). When off, a straight line is drawn instead.");
                 ImGui.SameLine();
                 ImGui.SetNextItemWidth(150);
                 ImGui.SliderFloat("Path Thickness", ref Settings.PathLineThickness, 1.0f, 8.0f);
-                ImGui.Checkbox("Draw Lines to Search in range", ref Settings.DrawLinesSearchQuery);
-                ImGui.SameLine();
-                ImGui.SliderFloat("##DrawSearchInRange", ref Settings.DrawSearchInRange, 1.0f, 10.0f);
-                ImGui.Checkbox("Draw Routes to Unique Maps", ref Settings.DrawLinesToUniqueMaps);
-                ImGui.Checkbox("Path to Lineage gem maps", ref Settings.PathToLineageMaps);
-                ImGui.Checkbox("Path to Arbiter fragments", ref Settings.PathToArbiterMaps);
+                ImGui.SetNextItemWidth(150);
+                ImGui.SliderFloat("Search route range", ref Settings.DrawSearchInRange, 1.0f, 10.0f);
                 ImGui.TreePop();
             }
 
             ImGui.SeparatorText("Atlas Settings");
             ImGui.Checkbox("Hide Completed Maps", ref Settings.HideCompletedMaps);
             ImGui.Checkbox("Hide Not Accessible Maps", ref Settings.HideNotAccessibleMaps);
-            ImGui.Checkbox("Show Content Count (dots)", ref Settings.ShowContentCount);
-            ImGuiHelper.ToolTip("Shows the number of content markers on each node as dots/pips (Essence/Breach/Ritual/Boss…). " +
-                "The exact content type isn't readable for non-rendered nodes, but the count is reliable for every node.");
-
-            ImGui.Checkbox("Show Content Names", ref Settings.ShowContentTokens);
-            ImGuiHelper.ToolTip("Draws per-node content names above the map name, merging both sources: the token vector " +
-                "(element+0x350, atlas/tower content) and the badge ids (badge+0x188, boss/corruption/unique content). " +
-                "Unknown tokens show as hex and unknown badge ids as #<id> for labeling.");
-
-            ImGui.Checkbox("Show Content Icons", ref Settings.ShowContentIcons);
-            ImGuiHelper.ToolTip("Draws each content as its in-game icon (from Plugins\\Atlas\\icons\\<name>.png) above the map " +
-                "name. Content without an icon file falls back to its text name when 'Show Content Names' is also on. " +
-                "Icons are suppressed on visible nodes (the game already draws them there) and shown only on hidden ones.");
-            if (Settings.ShowContentIcons)
-            {
-                ImGui.SetNextItemWidth(180);
-                ImGui.SliderFloat("Content Icon Size", ref Settings.ContentIconSize, 16f, 64f);
-            }
-
-            ImGui.Checkbox("Show Node Index (debug/RE)", ref Settings.ShowNodeIndex);
-            ImGuiHelper.ToolTip("DEBUG: draws each node's child-index (its number in the atlas-panel child list) as a badge " +
-                "to the left of the map name, so a node referenced by number is easy to locate on-screen.");
             ImGui.Checkbox("Show Biome Border", ref Settings.ShowBiomeBorder);
             if (Settings.ShowBiomeBorder)
                 if (ImGui.TreeNode("Biome Settings"))
@@ -445,7 +428,159 @@ namespace Atlas
                 }
                 ImGui.TreePop();
             }
+
+            ImGui.SeparatorText("Map Content");
+            DrawMapContentSettings();
+
+            ImGui.SeparatorText("Debug");
+            ImGui.Checkbox("Show Node Index (debug/RE)", ref Settings.ShowNodeIndex);
+            ImGuiHelper.ToolTip("DEBUG: draws each node's child-index (its number in the atlas-panel child list) as a badge " +
+                "to the left of the map name, so a node referenced by number is easy to locate on-screen.");
             #endregion
+        }
+
+        // "Map Content" settings: the content-icon overlay (size + offset) and user-defined content
+        // route groups. Each group holds content entries; each entry routes to the nearest node
+        // carrying that content with its own colour / thickness / hop-limit / draw toggle, and the
+        // group's master toggle gates the whole set without clearing the per-entry flags.
+        private void DrawMapContentSettings()
+        {
+            ImGui.Checkbox("Show Content Icons", ref Settings.ShowContentIcons);
+            ImGuiHelper.ToolTip("Draws each content as its in-game icon (from Plugins\\Atlas\\icons\\<name>.png) above the map " +
+                "name. Content without an icon file falls back to its text name. Icons are suppressed on visible nodes " +
+                "(the game already draws them there) and shown only on hidden ones.");
+            if (Settings.ShowContentIcons)
+            {
+                ImGui.SetNextItemWidth(180);
+                ImGui.SliderFloat("Content Icon Size", ref Settings.ContentIconSize, 16f, 64f);
+                var iconOffset = Settings.ContentIconOffset;
+                ImGui.SetNextItemWidth(180);
+                if (ImGui.SliderFloat2("Content Icon Offset (X,Y)", ref iconOffset, -64f, 64f))
+                    Settings.ContentIconOffset = iconOffset;
+            }
+
+            if (ImGui.TreeNode("Content Route Groups"))
+            {
+                ImGui.InputTextWithHint("##ContentGroupName", "group name", ref Settings.ContentGroupNameInput, 256);
+                ImGui.SameLine();
+                if (ImGui.Button("Add content group"))
+                {
+                    Settings.ContentGroups.Add(new ContentGroupSettings
+                    {
+                        Name = string.IsNullOrWhiteSpace(Settings.ContentGroupNameInput) ? "Content Group" : Settings.ContentGroupNameInput,
+                    });
+                    Settings.ContentGroupNameInput = string.Empty;
+                }
+
+                for (int gi = 0; gi < Settings.ContentGroups.Count; gi++)
+                {
+                    var grp = Settings.ContentGroups[gi];
+                    string title = grp.Locked ? $"{grp.Name} (built-in)##ContentGroup{gi}" : $"{grp.Name}##ContentGroup{gi}";
+                    if (!ImGui.TreeNode(title))
+                        continue;
+
+                    bool drawPaths = grp.DrawPaths;
+                    if (ImGui.Checkbox($"Draw paths##CG{gi}", ref drawPaths))
+                        grp.DrawPaths = drawPaths;
+                    ImGuiHelper.ToolTip("Master switch for this group: when off, no route is drawn for any of its content, " +
+                        "but each entry keeps its own 'route' checkbox unchanged.");
+
+                    // Built-in group: one line thickness for all its entries, shown right under "Draw paths".
+                    if (grp.Locked)
+                    {
+                        ImGui.SetNextItemWidth(180);
+                        float gth = grp.LineThickness;
+                        if (ImGui.SliderFloat($"Line thickness##CGth{gi}", ref gth, 1f, 8f))
+                            grp.LineThickness = gth;
+                    }
+
+                    // The built-in group can't be deleted and its content list is fixed.
+                    if (!grp.Locked)
+                    {
+                        ImGui.SameLine();
+                        if (ImGui.Button($"Delete group##CG{gi}"))
+                        {
+                            Settings.ContentGroups.RemoveAt(gi);
+                            ImGui.TreePop();
+                            break;
+                        }
+
+                        // Add-content combo (only content types not already in this group).
+                        ImGui.SetNextItemWidth(220);
+                        if (ImGui.BeginCombo($"##AddContent{gi}", "Add content…"))
+                        {
+                            foreach (var choice in ContentChoices)
+                            {
+                                if (grp.Contents.Exists(c => string.Equals(c.ContentName, choice, StringComparison.OrdinalIgnoreCase)))
+                                    continue;
+                                if (ImGui.Selectable(LocalizedName(choice)))
+                                    grp.Contents.Add(new ContentRouteEntry { ContentName = choice });
+                            }
+                            ImGui.EndCombo();
+                        }
+                    }
+
+                    for (int ci = 0; ci < grp.Contents.Count; ci++)
+                    {
+                        var entry = grp.Contents[ci];
+                        ImGui.PushID($"CG{gi}_C{ci}");
+
+                        bool draw = entry.DrawPath;
+                        if (ImGui.Checkbox("##route", ref draw))
+                            entry.DrawPath = draw;
+                        ImGuiHelper.ToolTip("Draw a route to the nearest node carrying this content.");
+
+                        ImGui.SameLine();
+                        var col = entry.LineColor;
+                        ColorSwatch("##color", ref col);
+                        entry.LineColor = col;
+
+                        // Icon (content entries only) + localized name (map name for built-in entries).
+                        ImGui.SameLine();
+                        if (NameToIcon.TryGetValue(entry.ContentName, out var basename)
+                            && TryGetIcon(DllDirectory, basename, out var iptr, out var iw, out var ih) && iptr != IntPtr.Zero)
+                        {
+                            float h = ImGui.GetFontSize();
+                            ImGui.Image(iptr, new Vector2(h * iw / Math.Max(1, ih), h));
+                            ImGui.SameLine();
+                        }
+                        ImGui.TextUnformatted(ContentEntryDisplayName(entry));
+                        if (LocalizedDesc(entry.ContentName) is { Length: > 0 } d)
+                            ImGuiHelper.ToolTip(d);
+
+                        // Built-in entries can't be removed (fixed content list).
+                        if (!grp.Locked)
+                        {
+                            ImGui.SameLine();
+                            if (ImGui.SmallButton("X"))
+                            {
+                                grp.Contents.RemoveAt(ci);
+                                ImGui.PopID();
+                                break;
+                            }
+                        }
+
+                        // Per-entry thickness only for user groups; the built-in group uses one group thickness.
+                        if (!grp.Locked)
+                        {
+                            ImGui.SetNextItemWidth(120);
+                            float th = entry.LineThickness;
+                            if (ImGui.SliderFloat("Thickness", ref th, 1f, 8f))
+                                entry.LineThickness = th;
+                            ImGui.SameLine();
+                        }
+                        ImGui.SetNextItemWidth(120);
+                        int hops = entry.MaxHops;
+                        if (ImGui.InputInt("Max hops (0=∞)", ref hops))
+                            entry.MaxHops = Math.Max(0, hops);
+
+                        ImGui.PopID();
+                    }
+
+                    ImGui.TreePop();
+                }
+                ImGui.TreePop();
+            }
         }
 
         public override void DrawUI()
@@ -538,8 +673,10 @@ namespace Atlas
                 Vector2 routeAnchor = playerLocation;   // "you are here" marker (context dot only, not the route start)
                 bool markerFound = false;
 
+                bool wantContentRoute = Settings.ContentGroups is { Count: > 0 }
+                    && Settings.ContentGroups.Any(g => g.DrawPaths && g.Contents.Any(c => c.DrawPath));
                 bool wantRoute = Settings.RouteLinesThroughNodes &&
-                    ((Settings.DrawLinesSearchQuery && doSearch) || Settings.DrawLinesToUniqueMaps
+                    (doSearch || wantContentRoute || Settings.DrawLinesToUniqueMaps
                      || Settings.PathToLineageMaps || Settings.PathToArbiterMaps);
                 if (wantRoute)
                 {
@@ -626,8 +763,10 @@ namespace Atlas
                         && string.Equals(nd.MapInfo?.Type, "unique", StringComparison.OrdinalIgnoreCase);
                     bool targetLineage = Settings.PathToLineageMaps && !completed && (nd.MapInfo?.HasTag("lineage") ?? false);
                     bool targetArbiter = Settings.PathToArbiterMaps && !completed && (nd.MapInfo?.HasTag("arbiter") ?? false);
-                    bool routeTarget = targetUnique || targetLineage || targetArbiter
-                        || (Settings.DrawLinesSearchQuery && doSearch);
+                    ContentRouteEntry contentEntry = null;
+                    ContentGroupSettings contentGroup = null;
+                    bool targetContent = !completed && MatchContentRoute(in nd, out contentEntry, out contentGroup);
+                    bool routeTarget = targetUnique || targetLineage || targetArbiter || targetContent || doSearch;
 
                     if (Settings.HideCompletedMaps && completed)
                         continue;
@@ -663,13 +802,23 @@ namespace Atlas
                     bool shouldDrawSearch = Settings.DrawLinesSearchQuery && doSearch
                         && searchList.Any(searchTerm => mapName.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
                         && boundsSearch.Contains(new PointF(drawPosition.X, drawPosition.Y));
-                    if (shouldDrawSearch || targetUnique || targetLineage || targetArbiter)
+                    if (shouldDrawSearch || targetContent || targetUnique || targetLineage || targetArbiter)
                     {
+                        // Content routes carry their own colour/thickness/hop-limit; search takes
+                        // precedence over a content match on the same node.
+                        bool contentRoute = targetContent && !shouldDrawSearch;
                         uint lineColor = shouldDrawSearch ? SearchLineColor
+                            : contentRoute ? ImGuiHelper.Color(contentEntry.LineColor)
                             : targetUnique ? UniqueLineColor
                             : targetLineage ? LineageLineColor
                             : ArbiterLineColor;
-                        float thickness = MathF.Max(1f, uiScale * Settings.PathLineThickness);
+                        // Built-in (locked) group uses one group-level thickness for all its entries;
+                        // user content groups use the per-entry thickness.
+                        float contentThickness = contentRoute
+                            ? (contentGroup is { Locked: true } ? contentGroup.LineThickness : contentEntry.LineThickness)
+                            : Settings.PathLineThickness;
+                        float thickness = MathF.Max(1f, uiScale * (contentRoute ? contentThickness : Settings.PathLineThickness));
+                        int maxHops = contentRoute ? contentEntry.MaxHops : 0;
                         bool drewRoute = false;
 
                         // Shortest hop path from the nearest accessible node to this target
@@ -677,7 +826,13 @@ namespace Atlas
                         if (routeReady && accessibleCameFrom != null)
                         {
                             var path = PathFromAccessible(nd.GridPosition, accessibleCameFrom, accessibleSet);
-                            if (path != null && path.Count > 0)
+                            // Hop-limit: suppress (but still mark handled, so no straight-line fallback)
+                            // a content route longer than the entry's MaxHops (0 = unlimited).
+                            if (path != null && path.Count > 0 && maxHops > 0 && path.Count - 1 > maxHops)
+                            {
+                                drewRoute = true;
+                            }
+                            else if (path != null && path.Count > 0)
                             {
                                 DrawNodePath(drawList, path, routeCenters, lineColor, thickness);
                                 int hops = path.Count - 1;
@@ -691,15 +846,19 @@ namespace Atlas
                                     drawList.AddCircle(startC, sr, DotOutlineColor, 0, MathF.Max(1f, sr * 0.35f));
                                 }
 
-                                // Hop count above the target node, drawn as the route pill "→N"
-                                // (dark pill, route-colored text matching the path line).
+                                // Hop count to the LEFT of the map-name box, vertically centered on it,
+                                // drawn as the route pill "N→" so the arrow points at the map ("N hops
+                                // to get here").
                                 drawList.ChannelsSetCurrent(ChannelLabels);
-                                string ht = "→" + hops.ToString(CultureInfo.InvariantCulture);
+                                string ht = hops.ToString(CultureInfo.InvariantCulture) + "→";
                                 float pillH = 18f * uiScale;
-                                float pillTopY = nodeCenter.Y - nodeSize.Y * 0.5f - pillH - 2f * uiScale;
+                                var htSize = ImGui.CalcTextSize(ht);
+                                float pillW = MathF.Max(pillH, htSize.X + 8f * uiScale);
+                                float pillCenterX = bgPos.X - (4f * uiScale) - pillW * 0.5f;
+                                float pillTopY = rectCenter.Y - pillH * 0.5f;
                                 var hopBg = new Vector4(0.05f, 0.05f, 0.05f, 0.85f);
                                 var hopFg = new Vector4(1f, 0.9f, 0.2f, 1f); // bright yellow (route line itself carries the color)
-                                DrawPill(drawList, ht, nodeCenter.X, pillTopY, hopBg, hopFg, uiScale);
+                                DrawPill(drawList, ht, pillCenterX, pillTopY, hopBg, hopFg, uiScale);
 
                                 drewRoute = true;
                             }
@@ -784,7 +943,7 @@ namespace Atlas
 
                         var hov = DrawContentRow(drawList, nd.ContentNames, DllDirectory, drawPosition, textSize, uiScale,
                             Settings.ShowContentIcons && !nodeVisible, Settings.ShowContentTokens,
-                            Settings.ContentIconSize * uiScale, mousePos);
+                            Settings.ContentIconSize * uiScale, mousePos, Settings.ContentIconOffset * uiScale);
                         if (hov != null)
                             hoverContentName = hov;
                     }
@@ -1098,7 +1257,116 @@ namespace Atlas
                     ContentTranslations[name] = kv.Value.Translates;
             }
 
+            // Selectable content list for the route-group editor: real content names only (skip the
+            // "[DNT] ..." placeholders and any "(...)"-wrapped non-content markers), de-duped + sorted.
+            ContentChoices.Clear();
+            var distinct = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in BadgeContentNames.Values)
+            {
+                if (string.IsNullOrWhiteSpace(n) || n[0] == '[' || n[0] == '(' || n[0] == '#')
+                    continue;
+                if (distinct.Add(n))
+                    ContentChoices.Add(n);
+            }
+            ContentChoices.Sort(StringComparer.OrdinalIgnoreCase);
+
             ApplyContentLanguage(Settings?.Language);
+        }
+
+        // The built-in (locked) content group. Its entries route by MAP classification (maps.json
+        // tag/type) rather than by node content — in-game these feel like content (Arbiter bosses,
+        // Citadels, Lineage maps). The list is fixed; only per-entry colour/thickness/hops/draw and
+        // the group master toggle are user-editable. Citadels carry the 'arbiter' tag in the data.
+        private const string BuiltInGroupName = "Map Targets";
+        // Built-in targets matched by exact internal MapId ("id:<MapId>"). Display names are resolved
+        // live to the selected UI language (ContentEntryDisplayName). Colours form four logical groups
+        // (Citadels=grey, Mothersoul=red, Lineage maps=cyan, Unique special=orange). `On` is the
+        // default per-entry DrawPath when the group is first created.
+        private static readonly (string MapId, Vector4 Color, bool On)[] BuiltInTargets =
+        {
+            ("MapUberBoss_StoneCitadel",     new Vector4(0.70f, 0.70f, 0.72f, 1f), true),  // grey
+            ("MapUberBoss_IronCitadel",      new Vector4(0.70f, 0.70f, 0.72f, 1f), true),  // grey
+            ("MapUberBoss_CopperCitadel",    new Vector4(0.70f, 0.70f, 0.72f, 1f), true),  // grey
+            ("MapMothersoul_Male",           new Vector4(0.90f, 0.20f, 0.20f, 1f), true),  // red
+            ("MapMothersoul_Female",         new Vector4(0.90f, 0.20f, 0.20f, 1f), true),  // red
+            ("MapDerelictMansion",           new Vector4(0.30f, 0.70f, 1.00f, 1f), false), // cyan
+            ("MapCavernCity",                new Vector4(0.30f, 0.70f, 1.00f, 1f), false), // cyan
+            ("MapVaalVault",                 new Vector4(0.30f, 0.70f, 1.00f, 1f), false), // cyan
+            ("MapUberBoss_JadeCitadel",      new Vector4(0.30f, 0.70f, 1.00f, 1f), false), // cyan
+            ("MapUniqueUntaintedParadise",   new Vector4(1.00f, 0.60f, 0.20f, 1f), false), // orange
+            ("MapUniqueCastaway",            new Vector4(1.00f, 0.60f, 0.20f, 1f), false), // orange
+        };
+
+        // Make sure the locked built-in group exists and its content list matches the fixed preset,
+        // preserving any per-entry style the user has customised (matched by the Match key).
+        private void EnsureBuiltInContentGroup()
+        {
+            if (Settings?.ContentGroups == null)
+                return;
+
+            var grp = Settings.ContentGroups.Find(g => g.Locked);
+            bool freshGroup = grp == null;
+            if (freshGroup)
+            {
+                grp = new ContentGroupSettings { Name = BuiltInGroupName, Locked = true };
+                Settings.ContentGroups.Insert(0, grp);
+            }
+
+            var reconciled = new List<ContentRouteEntry>(BuiltInTargets.Length);
+            bool anyMatched = false;
+            foreach (var (mapId, color, on) in BuiltInTargets)
+            {
+                var match = "id:" + mapId;
+                var existing = grp.Contents?.Find(c => string.Equals(c.Match, match, StringComparison.OrdinalIgnoreCase));
+                if (existing != null)
+                {
+                    existing.ContentName = mapId;  // fallback label; UI shows the localized map name
+                    reconciled.Add(existing);
+                    anyMatched = true;
+                }
+                else
+                {
+                    reconciled.Add(new ContentRouteEntry { ContentName = mapId, Match = match, LineColor = color, DrawPath = on });
+                }
+            }
+            grp.Contents = reconciled;
+
+            // Fresh group, or migration from an older preset (no entry matched the new id: keys): apply
+            // the seed default for the group master (on). An existing id-format group keeps the user's choice.
+            if (freshGroup || !anyMatched)
+                grp.DrawPaths = true;
+        }
+
+        // Evaluate a built-in map matcher against a node: "id:<MapId>" (exact internal id),
+        // "tag:<tag>" or "type:<type>" (maps.json classification).
+        private static bool MatchMapTarget(string match, string internalId, MapInfo info)
+        {
+            if (string.IsNullOrEmpty(match))
+                return false;
+            int c = match.IndexOf(':');
+            if (c < 0)
+                return false;
+            var kind = match[..c];
+            var val = match[(c + 1)..];
+            return kind switch
+            {
+                "id" => string.Equals(internalId, val, StringComparison.OrdinalIgnoreCase),
+                "tag" => info != null && info.HasTag(val),
+                "type" => info != null && string.Equals(info.Type, val, StringComparison.OrdinalIgnoreCase),
+                _ => false,
+            };
+        }
+
+        // Display label for a route entry in the active UI language: built-in (map) entries resolve the
+        // localized map name from maps.json; content entries use the localized content name.
+        private string ContentEntryDisplayName(ContentRouteEntry e)
+        {
+            if (!string.IsNullOrEmpty(e.Match) && e.Match.StartsWith("id:", StringComparison.OrdinalIgnoreCase))
+            {
+                var id = e.Match[3..];
+                return ResolveLocalizedName(id, GetMapInfo(id), Settings?.Language);
+            }
+            return LocalizedName(e.ContentName);
         }
 
         // Rebuild the active-language overlays (NameToLocalizedName/Desc) from ContentTranslations for
@@ -1440,7 +1708,7 @@ namespace Atlas
         private static readonly List<(bool isIcon, IntPtr ptr, float w, float h, string display, string key)> RowScratch = new();
         private static string DrawContentRow(ImDrawListPtr drawList, IReadOnlyList<string> names, string dllDir,
             Vector2 drawPosition, Vector2 textSize, float uiScale, bool showIcons, bool showNames, float iconH,
-            Vector2 mousePos)
+            Vector2 mousePos, Vector2 iconOffset)
         {
             var items = RowScratch;
             items.Clear();
@@ -1483,14 +1751,17 @@ namespace Atlas
             foreach (var it in items)
             {
                 float y = topY + (rowH - it.h) * 0.5f;
+                // Icons can be nudged by the user (ContentIconOffset); text chips stay put.
+                float ix = it.isIcon ? x + iconOffset.X : x;
+                float iy = it.isIcon ? y + iconOffset.Y : y;
                 if (it.isIcon)
-                    drawList.AddImage(it.ptr, new Vector2(x, y), new Vector2(x + it.w, y + it.h));
+                    drawList.AddImage(it.ptr, new Vector2(ix, iy), new Vector2(ix + it.w, iy + it.h));
                 else
-                    drawList.AddText(new Vector2(x, y), textColor, it.display);
+                    drawList.AddText(new Vector2(ix, iy), textColor, it.display);
 
                 // Hit-test the cursor against this marker's rect (the overlay tracks the atlas-screen
                 // cursor); the hovered (English) key drives the tooltip drawn after the node pass.
-                if (mousePos.X >= x && mousePos.X <= x + it.w && mousePos.Y >= y && mousePos.Y <= y + it.h)
+                if (mousePos.X >= ix && mousePos.X <= ix + it.w && mousePos.Y >= iy && mousePos.Y <= iy + it.h)
                     hovered = it.key;
 
                 x += it.w + gap;
@@ -2076,6 +2347,54 @@ namespace Atlas
             if (BadgeContentNames.TryGetValue(key, out var name))
                 return name;
             return "#" + key.ToString(CultureInfo.InvariantCulture);
+        }
+
+        // Find the route entry that should draw a line to a node carrying one of `contentNames`.
+        // Scans content groups in order (group master toggle + per-entry toggle both required) and
+        // returns the first match. Returns false when no enabled entry matches this node's content.
+        private bool MatchContentRoute(in NodeData nd, out ContentRouteEntry match, out ContentGroupSettings matchGroup)
+        {
+            match = null;
+            matchGroup = null;
+            if (Settings?.ContentGroups is not { Count: > 0 })
+                return false;
+
+            var contentNames = nd.ContentNames;
+            foreach (var grp in Settings.ContentGroups)
+            {
+                if (!grp.DrawPaths || grp.Contents is not { Count: > 0 })
+                    continue;
+                foreach (var entry in grp.Contents)
+                {
+                    if (!entry.DrawPath)
+                        continue;
+
+                    // Built-in entries match by map id/classification; user entries by node content.
+                    if (!string.IsNullOrEmpty(entry.Match))
+                    {
+                        if (MatchMapTarget(entry.Match, nd.InternalId, nd.MapInfo))
+                        {
+                            match = entry;
+                            matchGroup = grp;
+                            return true;
+                        }
+                        continue;
+                    }
+
+                    if (string.IsNullOrEmpty(entry.ContentName) || contentNames is not { Length: > 0 })
+                        continue;
+                    foreach (var cn in contentNames)
+                    {
+                        if (string.Equals(cn, entry.ContentName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            match = entry;
+                            matchGroup = grp;
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
         }
 
         private static ContentInfo MatchContent(string contentName,
