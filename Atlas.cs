@@ -236,6 +236,14 @@ namespace Atlas
         public override void DrawSettings()
         {
             #region SettingsUI
+            ImGui.SeparatorText("Input");
+            if (ImGui.Checkbox("Controller Mode", ref Settings.ControllerMode))
+                nodeCache.Clear(); // re-resolve the panel on the other layout next frame
+            ImGuiHelper.ToolTip("GameHelper auto-detects controller mode, so you normally don't need this. " +
+                "Tick it only to FORCE the controller Atlas layout if auto-detect ever fails. Either way the " +
+                "plugin falls back to the other layout when the selected one isn't found. In controller mode " +
+                "the overlay also stays visible while the inventory is open.");
+
             ImGui.SeparatorText("Font");
             if (ImGui.Checkbox("Universal font (render map names in any language)", ref Settings.UniversalFont))
             {
@@ -660,7 +668,7 @@ namespace Atlas
 
             using (new FontScaleScope(uiScale))
             {
-                if (!Settings.ControllerMode)
+                if (!(Core.GHSettings.EnableControllerMode || Settings.ControllerMode))
                     if (inventoryPanel)
                         return;
 
@@ -2065,7 +2073,22 @@ namespace Atlas
         private const uint AtlasPanelFp = 0x00562EF5;
         private const uint AtlasGateFp = 0x00502EF1;
         private const uint AtlasNodeListFp = 0x00502EF3;
+        // Controller layout only: a mid-container fp sitting between GameUi and the panel (it's also
+        // the atlas map-node fp). Verified live for PoE2 0.5.x.
+        private const uint AtlasMapNodeFp = 0x00542EF3;
         private const uint IsVisibleMask = 0x800u;
+
+        // KB/Mouse: the panel is a DIRECT child of GameUi → Panel→Gate→NodeList (3 hops).
+        // Controller: GameHelper auto-detects controller mode (InGameState.UiRootStructPtr == 0) and
+        // swaps GameUi.Address to the gamepad UI manager (fp 0x502EF0); under it the SAME
+        // Panel→Gate→NodeList triplet sits 3 levels deeper, reached by Gate→MapNode→Gate→Panel→
+        // Gate→NodeList (6 hops, verified live 0.5.x). The fp tail is identical, so BOTH chains return
+        // the same node-list container (fp 0x502EF3) the rest of the plugin treats as the panel address.
+        private static readonly uint[] KbMouseChain = { AtlasPanelFp, AtlasGateFp, AtlasNodeListFp };
+        private const int KbMouseGateStep = 1;            // the Gate, one level below the panel
+        private static readonly uint[] ControllerChain =
+            { AtlasGateFp, AtlasMapNodeFp, AtlasGateFp, AtlasPanelFp, AtlasGateFp, AtlasNodeListFp };
+        private const int ControllerGateStep = 4;         // the Gate, one level below the panel
 
         private IntPtr GetAtlasPanelAddress()
         {
@@ -2073,9 +2096,16 @@ namespace Atlas
             if (gameUi == IntPtr.Zero)
                 return IntPtr.Zero;
 
-            uint[] fps = { AtlasPanelFp, AtlasGateFp, AtlasNodeListFp };
-            int gateStep = 1; // step where IsVisible MUST be set (the toggling sub-container)
-            return WalkFp(gameUi, fps, gateStep, 0);
+            // Resolve via the active input layout first, then auto-fall back to the other so the panel
+            // is found regardless. GH already auto-detects controller mode; the manual toggle force-ons
+            // it as a safety override.
+            bool controller = Core.GHSettings.EnableControllerMode || Settings.ControllerMode;
+            var (primary, primaryGate, secondary, secondaryGate) = controller
+                ? (ControllerChain, ControllerGateStep, KbMouseChain, KbMouseGateStep)
+                : (KbMouseChain, KbMouseGateStep, ControllerChain, ControllerGateStep);
+
+            var addr = WalkFp(gameUi, primary, primaryGate, 0);
+            return addr != IntPtr.Zero ? addr : WalkFp(gameUi, secondary, secondaryGate, 0);
         }
 
         private UiElement GetAtlasPanelUi()
