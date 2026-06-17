@@ -54,9 +54,11 @@ namespace Atlas
         private string SettingPathname => Path.Join(DllDirectory, "config", "settings.txt");
         private string MapGroupsPathname => Path.Join(DllDirectory, "config", "mapgroups.json");
         private string NewGroupName = string.Empty;
-        // Free-text filters for the "Add content…" / "Add map…" pickers (one combo open at a time).
+        // Free-text filters for the "Add content…" / "Add map…" (content-route) / map-group pickers
+        // (one combo open at a time).
         private string ContentAddFilter = string.Empty;
         private string MapAddFilter = string.Empty;
+        private string MapGroupAddFilter = string.Empty;
         // Distinct map display names for the picker, as (canonical English name, localized name), sorted
         // by the localized name. Rebuilt when the UI language changes (MapPickCacheLang tracks it).
         private static readonly List<(string English, string Localized)> MapPickCache = new();
@@ -422,6 +424,34 @@ namespace Atlas
 
                         if (ImGui.Button($"Add new map##AddNewMap{i}"))
                             mapGroup.Maps.Add(string.Empty);
+
+                        // Pick a map from a filtered list instead of typing it. Stores the localized
+                        // name (map groups match by the displayed name in the selected language); the
+                        // filter narrows by localized or English name. Skips maps already in the group.
+                        ImGui.SameLine();
+                        ImGui.SetNextItemWidth(220);
+                        if (ImGui.BeginCombo($"##MapGroupAdd{i}", "Add from list…"))
+                        {
+                            EnsureMapPickCache();
+                            ImGui.SetNextItemWidth(-1);
+                            ImGui.InputTextWithHint($"##MapGroupFilter{i}", "filter…", ref MapGroupAddFilter, 64);
+                            var gfilter = MapGroupAddFilter;
+                            foreach (var (english, localized) in MapPickCache)
+                            {
+                                if (!string.IsNullOrEmpty(gfilter)
+                                    && localized.IndexOf(gfilter, StringComparison.OrdinalIgnoreCase) < 0
+                                    && english.IndexOf(gfilter, StringComparison.OrdinalIgnoreCase) < 0)
+                                    continue;
+                                if (mapGroup.Maps.Exists(m => NormalizeName(m).Equals(localized, StringComparison.OrdinalIgnoreCase)))
+                                    continue;
+                                if (ImGui.Selectable($"{localized}##mg{english}"))
+                                {
+                                    mapGroup.Maps.Add(localized);
+                                    MapGroupAddFilter = string.Empty;
+                                }
+                            }
+                            ImGui.EndCombo();
+                        }
 
                         if (ImGui.BeginPopupModal($"RenamePopup##{i}", ImGuiWindowFlags.AlwaysAutoResize))
                         {
