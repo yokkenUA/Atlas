@@ -54,6 +54,13 @@ namespace Atlas
         private string SettingPathname => Path.Join(DllDirectory, "config", "settings.txt");
         private string MapGroupsPathname => Path.Join(DllDirectory, "config", "mapgroups.json");
         private string NewGroupName = string.Empty;
+        // Free-text filters for the "Add content…" / "Add map…" pickers (one combo open at a time).
+        private string ContentAddFilter = string.Empty;
+        private string MapAddFilter = string.Empty;
+        // Distinct map display names for the picker, as (canonical English name, localized name), sorted
+        // by the localized name. Rebuilt when the UI language changes (MapPickCacheLang tracks it).
+        private static readonly List<(string English, string Localized)> MapPickCache = new();
+        private static string MapPickCacheLang = null;
 
         private static readonly Dictionary<string, ContentInfo> MapTags = [];
         private static readonly Dictionary<string, ContentInfo> MapPlain = [];
@@ -513,21 +520,63 @@ namespace Atlas
                             break;
                         }
 
-                        // Add-content combo (only content types not already in this group).
+                        // Add-content combo (only content types not already in this group). Filter box
+                        // narrows by content name OR description (in the selected UI language).
                         ImGui.SetNextItemWidth(220);
                         if (ImGui.BeginCombo($"##AddContent{gi}", "Add content…"))
                         {
+                            ImGui.SetNextItemWidth(-1);
+                            ImGui.InputTextWithHint($"##ContentFilter{gi}", "filter…", ref ContentAddFilter, 64);
+                            var cfilter = ContentAddFilter;
                             foreach (var choice in ContentChoices)
                             {
                                 if (grp.Contents.Exists(c => string.Equals(c.ContentName, choice, StringComparison.OrdinalIgnoreCase)))
                                     continue;
                                 // Show "Name — description" (description truncated when long); the
                                 // stable id (##choice) keeps selection independent of the shown text.
-                                var label = LocalizedName(choice);
-                                if (LocalizedDesc(choice) is { Length: > 0 } cd)
+                                var name = LocalizedName(choice);
+                                var desc = LocalizedDesc(choice);
+                                if (!string.IsNullOrEmpty(cfilter)
+                                    && name.IndexOf(cfilter, StringComparison.OrdinalIgnoreCase) < 0
+                                    && (desc is null || desc.IndexOf(cfilter, StringComparison.OrdinalIgnoreCase) < 0)
+                                    && choice.IndexOf(cfilter, StringComparison.OrdinalIgnoreCase) < 0)
+                                    continue;
+                                var label = name;
+                                if (desc is { Length: > 0 } cd)
                                     label += " — " + Truncate(cd, 60);
                                 if (ImGui.Selectable($"{label}##{choice}"))
+                                {
                                     grp.Contents.Add(new ContentRouteEntry { ContentName = choice });
+                                    ContentAddFilter = string.Empty;
+                                }
+                            }
+                            ImGui.EndCombo();
+                        }
+
+                        // Add-map combo: route by map name (matches every internal id-variant of that
+                        // name). Names are shown/sorted in the selected UI language; filter box narrows.
+                        ImGui.SameLine();
+                        ImGui.SetNextItemWidth(220);
+                        if (ImGui.BeginCombo($"##AddMap{gi}", "Add map…"))
+                        {
+                            EnsureMapPickCache();
+                            ImGui.SetNextItemWidth(-1);
+                            ImGui.InputTextWithHint($"##MapFilter{gi}", "filter…", ref MapAddFilter, 64);
+                            var filter = MapAddFilter;
+                            foreach (var (english, localized) in MapPickCache)
+                            {
+                                if (!string.IsNullOrEmpty(filter)
+                                    && localized.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0
+                                    && english.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
+                                    continue;
+                                var match = "name:" + english;
+                                if (grp.Contents.Exists(c => string.Equals(c.Match, match, StringComparison.OrdinalIgnoreCase)))
+                                    continue;
+                                if (ImGui.Selectable($"{localized}##map{english}"))
+                                {
+                                    grp.Contents.Add(new ContentRouteEntry { Match = match });
+                                    MapAddFilter = string.Empty;
+                                }
                             }
                             ImGui.EndCombo();
                         }
@@ -1364,6 +1413,8 @@ namespace Atlas
             return kind switch
             {
                 "id" => string.Equals(internalId, val, StringComparison.OrdinalIgnoreCase),
+                // Match by canonical English display name → catches every internal id-variant sharing it.
+                "name" => info != null && string.Equals(info.Name, val, StringComparison.OrdinalIgnoreCase),
                 "tag" => info != null && info.HasTag(val),
                 "type" => info != null && string.Equals(info.Type, val, StringComparison.OrdinalIgnoreCase),
                 _ => false,
@@ -1383,7 +1434,39 @@ namespace Atlas
                 var id = e.Match[3..];
                 return ResolveLocalizedName(id, GetMapInfo(id), Settings?.Language);
             }
+            if (!string.IsNullOrEmpty(e.Match) && e.Match.StartsWith("name:", StringComparison.OrdinalIgnoreCase))
+                return ResolveLocalizedMapName(e.Match[5..], Settings?.Language);
             return LocalizedName(e.ContentName);
+        }
+
+        // Localized display for a canonical English map name (resolved via any id-variant carrying it).
+        private static string ResolveLocalizedMapName(string englishName, string lang)
+        {
+            if (string.IsNullOrWhiteSpace(englishName))
+                return englishName;
+            foreach (var info in MapInfos.Values)
+                if (string.Equals(info.Name, englishName, StringComparison.OrdinalIgnoreCase))
+                    return ResolveLocalizedName(null, info, lang);
+            return englishName;
+        }
+
+        // Build/refresh the deduped, language-sorted map list backing the "Add map…" picker.
+        private void EnsureMapPickCache()
+        {
+            var lang = Settings?.Language ?? string.Empty;
+            if (MapPickCacheLang == lang && MapPickCache.Count > 0)
+                return;
+
+            MapPickCache.Clear();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var info in MapInfos.Values)
+            {
+                if (info == null || string.IsNullOrWhiteSpace(info.Name) || !seen.Add(info.Name))
+                    continue;
+                MapPickCache.Add((info.Name, ResolveLocalizedName(null, info, lang)));
+            }
+            MapPickCache.Sort((a, b) => string.Compare(a.Localized, b.Localized, StringComparison.InvariantCultureIgnoreCase));
+            MapPickCacheLang = lang;
         }
 
         // Rebuild the active-language overlays (NameToLocalizedName/Desc) from ContentTranslations for
