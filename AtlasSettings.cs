@@ -23,7 +23,7 @@ namespace Atlas
 
         public string SearchQuery = string.Empty;
         public bool DrawLinesSearchQuery = true;
-        public float DrawSearchInRange = 1.3f;
+        public float DrawSearchInRange = 1.0f;
 
         // Route to all reachable maps flagged 'unique' in maps.json.
         public bool DrawLinesToUniqueMaps = false;
@@ -33,6 +33,9 @@ namespace Atlas
 
         public bool HideCompletedMaps = true;
         public bool HideNotAccessibleMaps = true;
+        // Hide maps that are accessible/runnable right now (state AccessibleNow — the green-bordered
+        // nodes). On by default.
+        public bool HideAvailableMaps = true;
         public bool HideFailedMaps = true;
         public bool ShowMapBadges = true;
         // Show a small badge with the number of content markers on each node (Essence/Breach/
@@ -46,7 +49,7 @@ namespace Atlas
         public bool ShowContentTokens = false;
         // Render per-node content as in-game icons (icons\<basename>.png) instead of / alongside text.
         // Content without a loaded icon still falls back to its text name. See docs/re-findings.md §2.10.3.
-        public bool ShowContentIcons = true;
+        public bool ShowContentIcons = false;
         // Height (px, before UI scaling) of a content icon drawn above a node.
         public float ContentIconSize = 32f;
         // Pixel nudge (before UI scaling) applied to a content icon's position above a node.
@@ -55,19 +58,23 @@ namespace Atlas
         // badge to the LEFT of the map name, so a node called out by number is easy to find on-screen.
         public bool ShowNodeIndex = false;
         public bool ShowBiomeBorder = true;
-        public float BiomeBorderThickness = 2.5f;
+        public float BiomeBorderThickness = 2.0f;
 
         public bool RouteLinesThroughNodes = true;
         public float PathLineThickness = 1f;
+        // Gap between the directional chevrons drawn along a route, as a multiple of the chevron size
+        // (higher = more spread out).
+        public float RouteArrowSpacing = 8f;
 
         public float BaseWidth = 1920f;
         public float BaseHeight = 1080f;
-        public Vector2 AnchorNudge = Vector2.Zero;
-        public float ScaleMultiplier = 1.1f;
+        public Vector2 AnchorNudge = new(0f, 28f);
+        public float ScaleMultiplier = 1.0f;
 
         // Persisted in its own config/mapgroups.json (loaded/saved by the plugin), not settings.txt.
+        // Seeded with the default set of map styles, used when no mapgroups.json exists yet.
         [JsonIgnore]
-        public List<MapGroupSettings> MapGroups = [];
+        public List<MapGroupSettings> MapGroups = BuildDefaultMapGroups();
         public string GroupNameInput = string.Empty;
 
         public Dictionary<string, ContentOverride> ContentOverrides = [];
@@ -79,7 +86,26 @@ namespace Atlas
         public List<ContentGroupSettings> ContentGroups = [];
         public string ContentGroupNameInput = string.Empty;
 
-        // No seeded Map Groups — the list starts empty and the user creates their own.
+        // Default map styles, applied on a fresh install (no config/mapgroups.json). Once that file
+        // exists the plugin loads it instead, so user edits/removals persist.
+        private static List<MapGroupSettings> BuildDefaultMapGroups() => new()
+        {
+            new MapGroupSettings("Expedition unique", new(1f, 1f, 1f, 0.85f), new(0f, 0.03187251f, 1f, 1f))
+                { Maps = { "Moor of Fallen Skies" } },
+            new MapGroupSettings("Expedition bosses", new(1f, 1f, 1f, 0.85f), new(0.06374502f, 0f, 1f, 1f))
+                { Maps = { "Sprawling Jungle", "Secluded Temple", "Obscure Island", "Mournful Cliffside" } },
+            new MapGroupSettings("Unique maps low tier", new(0f, 0f, 0f, 0.85f), new(0.9760956f, 0.45393923f, 0.019444108f, 1f))
+                { Maps = { "The Fractured Lake", "The Ezomyte Megaliths", "Merchant's Campsite", "Jado's Campsite",
+                           "Moment of Zen", "The Voyage", "The Silent Cave", "Vaults of Kamasa", "The Viridian Wildwood" } },
+            new MapGroupSettings("Unique maps top tier", new(0.80876493f, 0.34799448f, 0f, 0.85f), new(0.9163346f, 0.9163346f, 0.9163346f, 1f))
+                { Maps = { "Castaway", "Untainted Paradise" } },
+            new MapGroupSettings("Citadels", new(0.3851442f, 0.38499388f, 0.3944223f, 0.85f), new(1f, 0.9561753f, 0f, 1f))
+                { Maps = { "The Copper Citadel", "The Iron Citadel", "The Stone Citadel" } },
+            new MapGroupSettings("Halls", new(0.38431373f, 0.38431373f, 0.39607844f, 0.8509804f), new(1f, 0.95686275f, 0f, 1f))
+                { Maps = { "The Matriarch Halls", "The Patriarch Halls" } },
+            new MapGroupSettings("Anomaly maps", new(0.056364175f, 0.21115535f, 0.07979868f, 0.85f), new(1f, 1f, 1f, 1f))
+                { Maps = { "The Jade Isles", "Sealed Vault", "Sacred Reservoir", "Derelict Mansion" } },
+        };
     }
 
     public class MapGroupSettings(string name, Vector4 backgroundColor, Vector4 fontColor)

@@ -1,47 +1,47 @@
 {
   "0": {
     "Label": "Water",
-    "BorderColor": [ 0.028, 0.0, 0.911, 0.9 ],
+    "BorderColor": [ 0.37180364, 0.64923674, 0.9721116, 0.9 ],
     "Show": true
   },
   "1": {
     "Label": "Mountain",
-    "BorderColor": [ 0.842, 0.842, 0.842, 0.9 ],
+    "BorderColor": [ 0.9920319, 0.9580514, 0.8892716, 0.9 ],
     "Show": true
   },
   "2": {
     "Label": "Grass",
-    "BorderColor": [ 0.0, 0.923, 0.335, 0.9 ],
+    "BorderColor": [ 0.2016158, 0.87250996, 0.0, 0.9 ],
     "Show": true
   },
   "3": {
     "Label": "Forest",
-    "BorderColor": [ 0.0, 0.266, 0.097, 0.9 ],
+    "BorderColor": [ 0.09833176, 0.41832668, 0.13912793, 0.9 ],
     "Show": true
   },
   "4": {
     "Label": "Swamp",
-    "BorderColor": [ 0.028, 0.0, 0.911, 0.9 ],
+    "BorderColor": [ 0.2868526, 0.28291413, 0.2811384, 0.9 ],
     "Show": true
   },
   "5": {
     "Label": "Desert",
-    "BorderColor": [ 0.799, 0.518, 0.0, 0.9 ],
+    "BorderColor": [ 0.98406374, 0.7717247, 0.38029554, 0.9 ],
     "Show": true
   },
   "6": {
     "Label": "Ezomyte City",
-    "BorderColor": [ 1.0, 1.0, 1.0, 0.9 ],
+    "BorderColor": [ 0.9647059, 0.38039216, 0.38039216, 0.9019608 ],
     "Show": true
   },
   "7": {
     "Label": "Faridun City",
-    "BorderColor": [ 1.0, 1.0, 1.0, 0.9 ],
+    "BorderColor": [ 0.9647059, 0.38039216, 0.38039216, 0.9019608 ],
     "Show": true
   },
   "8": {
     "Label": "Vaal City",
-    "BorderColor": [ 1.0, 1.0, 1.0, 0.9 ],
+    "BorderColor": [ 0.9641434, 0.38027966, 0.38027966, 0.9 ],
     "Show": true
   },
   "9": {
@@ -51,17 +51,17 @@
   },
   "10": {
     "Label": "Ocean",
-    "BorderColor": [ 0.0, 0.4, 0.8, 0.9 ],
+    "BorderColor": [ 0.016253712, 0.2798262, 0.5099602, 0.9 ],
     "Show": true
   },
   "11": {
     "Label": "Island",
-    "BorderColor": [ 0.2, 0.7, 0.6, 0.9 ],
+    "BorderColor": [ 0.27955112, 0.58964145, 0.5276234, 0.9 ],
     "Show": true
   },
   "12": {
     "Label": "Oriath City",
-    "BorderColor": [ 1.0, 1.0, 1.0, 0.9 ],
+    "BorderColor": [ 0.9647059, 0.38039216, 0.38039216, 0.9019608 ],
     "Show": true
   }
 }
