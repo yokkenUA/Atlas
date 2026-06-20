@@ -1580,6 +1580,8 @@ namespace Atlas
                     ContentTranslations[name] = kv.Value.Translates;
             }
 
+            SeedSpecialBadges();
+
             // Selectable content list for the route-group editor: real content names only (skip the
             // "[DNT] ..." placeholders and any "(...)"-wrapped non-content markers), de-duped + sorted.
             ContentChoices.Clear();
@@ -1594,6 +1596,25 @@ namespace Atlas
             ContentChoices.Sort(StringComparer.OrdinalIgnoreCase);
 
             ApplyContentLanguage(Settings?.Language);
+        }
+
+        // Special map-state contents that have a VisualIdentity icon but NO EndgameMapContent row, so
+        // they are absent from mapcontent.json (which is generated row+100). Their badge+0x188 low16 is
+        // a Stats.dat row id (NOT row+100) and DRIFTS by ±1 across game patches — so every observed id
+        // is mapped. See docs/re-findings-atlas.md §2.10.6.
+        //   Grand Mirror = DeliriumGigaMirror, badge id = stat `map_delirium_has_giga_mirror`
+        //   (24918 in the 2026-06-10 dump, 24919 live). The durable fix is to resolve that stat name to
+        //   its current row id at dump time and emit it into mapcontent.json; this runtime seed makes it
+        //   resolve on the current client without a json rebuild. Icon = icons/AtlasIconContentGigaMirror.png
+        //   (deployed by the csproj icon-copy step); falls back to a text chip if the PNG is missing.
+        private static void SeedSpecialBadges()
+        {
+            const string grandMirror = "Grand Mirror";
+            foreach (var id in new uint[] { 24918u, 24919u })
+                BadgeContentNames[id] = grandMirror;
+            NameToIcon[grandMirror] = "AtlasIconContentGigaMirror";
+            NameToDesc[grandMirror] = "Contains a reflection of the Map Boss. When the bosses are " +
+                "defeated Delirium fog spreads to nearby Maps.";
         }
 
         // The built-in (locked) content group. Its entries route by MAP classification (maps.json
@@ -2728,13 +2749,17 @@ namespace Atlas
             return seen.Count == 0 ? NoContentNames : seen.ToArray();
         }
 
-        // Resolve a badge content id to its name via mapcontent.json (keyed by the low 16 bits).
-        // Unknown ids fall through to "#<id>" so they stay visible for labeling. Returns "" for 0.
-        // Ids above 1000 (1000 = Corruption is the highest real content id) are not displayed.
+        // Resolve a badge content id to its name. The low 16 bits are either an EndgameMapContent
+        // row+100 (100-165, from mapcontent.json) or a Stats.dat row id for special map-state content
+        // that has no table row (e.g. Grand Mirror = stat map_delirium_has_giga_mirror, seeded in
+        // SeedSpecialBadges). Unknown ids fall through to "#<id>" so they stay VISIBLE for labeling
+        // instead of being silently dropped — this is how new/unmapped specials get noticed. ""only for 0.
+        // NOTE: an earlier `key > 1000` cutoff silently discarded every stat-id special (Grand Mirror
+        // came through as 24919); removed. See docs/re-findings-atlas.md §2.10.6.
         public static string ResolveBadgeContent(uint id)
         {
             uint key = id & 0xFFFFu;
-            if (key == 0 || key > 1000)
+            if (key == 0)
                 return string.Empty;
             if (BadgeContentNames.TryGetValue(key, out var name))
                 return name;
