@@ -19,7 +19,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\GameHelper\GameHelper.csproj">
+    <ProjectReference Include="$(GameHelperCoreDir)\GameHelper\GameHelper.csproj">
       <Private>false</Private>
       <CopyLocalSatelliteAssemblies>false</CopyLocalSatelliteAssemblies>
     </ProjectReference>
@@ -51,13 +51,13 @@
   </ItemGroup>
 
   <Target Name="CopyFiles" AfterTargets="Build">
-    <Copy SourceFiles="$(OutDir)$(TargetName)$(TargetExt);$(OutDir)$(TargetName).pdb;" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(OutDir)json\biome.json;$(OutDir)json\content.json;$(OutDir)json\mapcontent.json;$(OutDir)json\maps.json" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)\json" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(OutDir)fonts\DejaVuSans.ttf;$(OutDir)fonts\unifont.ttf" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)\fonts" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OutDir)$(TargetName)$(TargetExt);$(OutDir)$(TargetName).pdb;" DestinationFolder="$(GameHelperPluginDeployDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OutDir)json\biome.json;$(OutDir)json\content.json;$(OutDir)json\mapcontent.json;$(OutDir)json\maps.json" DestinationFolder="$(GameHelperPluginDeployDir)\json" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OutDir)fonts\DejaVuSans.ttf;$(OutDir)fonts\unifont.ttf" DestinationFolder="$(GameHelperPluginDeployDir)\fonts" SkipUnchangedFiles="true" />
     <ItemGroup>
       <DeployIcons Include="$(OutDir)icons\*.png" />
     </ItemGroup>
-    <Copy SourceFiles="@(DeployIcons)" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)\icons" SkipUnchangedFiles="true" Condition="'@(DeployIcons)' != ''" />
+    <Copy SourceFiles="@(DeployIcons)" DestinationFolder="$(GameHelperPluginDeployDir)\icons" SkipUnchangedFiles="true" Condition="'@(DeployIcons)' != ''" />
   </Target>
 
 </Project>
