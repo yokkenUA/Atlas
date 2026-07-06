@@ -63,6 +63,108 @@ namespace Atlas
         public bool ShowBiomeBorder = true;
         public float BiomeBorderThickness = 2.0f;
 
+        // Uncharted Waters leylines: hovering a sea "ship" (the Uncharted Waters logbook button)
+        // highlights the map nodes of its 16x16 atlas chunk — the exact set a logbook used there
+        // reveals (the hidden maps are already assigned client-side) — as their connection graph,
+        // drawn like "Show node connections" but thicker. See obsidian poe2/Atlas.md §"Sea / ships".
+        public bool ShowUnchartedLeylines = false;
+        public Vector4 UnchartedLeylineColor = new(0.35f, 0.85f, 1f, 0.75f);
+        public float UnchartedLeylineThickness = 3.5f;
+
+        // Draw an icon (icons\UnchartedShip.png; fallback marker when absent) at sea ships the
+        // game does NOT currently render (deep fog), one per uncharted chunk — so upcoming
+        // Uncharted Waters spots are visible before you sail close. Hovering the icon also
+        // triggers the leyline highlight when that toggle is on.
+        public bool ShowShipsInFog = false;
+        public float ShipIconSize = 64f;   // slider range 32..96; out-of-range saves migrate back to 64
+
+        // Per-map rating (0 = normal … 10 = terrible) drawn as a colored number pill to the RIGHT
+        // of the map name. Ratings are keyed by the map's canonical ENGLISH display name (the
+        // maps.json "name"), so one rating covers every internal id variant and the label itself
+        // renders localized. Persisted in config/mapratings.json (seeded from json\mapratings.json
+        // on first run), kept out of settings.txt via [JsonIgnore].
+        public bool ShowMapRating = true;
+        [JsonIgnore]
+        public Dictionary<string, int> MapRatings = new();
+
+        // "Show Ritual mods (on hover)" — the one Rite-mod display toggle. Covers BOTH:
+        // (a) committed line nodes' actual mods (blue) — the client attaches a text child with the
+        //     localized mod lines to every line node (widget+0x3B8); we read that ready-made text
+        //     and draw it under the map name, including for fogged line nodes; and
+        // (b) PREDICTION (green): the exact mods the game WILL roll for every still-reachable
+        //     node, before you click — fully reversed client-side roll (TinyMT32 seeded by
+        //     (lineId, committedCount, candIdx, modCount), weighted reservoir over
+        //     RitualAtlasLineMods; both mods of a two-mod node). Pre-line, hover an accessible
+        //     map to preview the chain from that start. See obsidian poe2/Ritual.md.
+        // (The old separate ShowRitualMods toggle was folded into this one, 2026-07-06.)
+        public bool ShowRitualPrediction = false;
+
+        // RE/DEBUG: log the deterministic Rite-mod roll ground-truth (line id + committed/pending
+        // grids + each line node's rolled mod text) to config/ritual_roll_log.jsonl, deduped. Used
+        // to reverse the client-side roll so mods can be predicted before selection. Off by default.
+        public bool LogRitualRolls = false;
+
+        // "Head of the king Rewards" planner window, auto-shown while the ritual LINE mode (page mode 6)
+        // is active: enumerates every possible chain from EVERY eligible start node (or from the
+        // line's committed frontier once drawing started) with each node's predicted Rite mod,
+        // filterable by desired rewards; selected chains draw a ray from the player to their start
+        // plus a highlighted route with reward labels on the atlas. Needs ShowRitualPrediction's
+        // data (pool/candidate table).
+        public bool ShowRitualPlanner = true;
+
+        // Persisted reward wish-list for the planner window: '|'-joined short reward labels picked
+        // in the filter dropdown, OR-matched (a chain is shown when ANY selected reward is in it).
+        public string RitualRewardFilter = string.Empty;
+
+        // Per-reward weights (short label → weight, sparse: only nonzero saved) edited in the
+        // table under the planner toggle. Planner routes are sorted by the summed weight of
+        // their predicted rewards, highest first; negative pushes a route down. The initializer
+        // is the shipped default ranking (roughly: value in Divines); ObjectCreationHandling
+        // .Replace makes a saved dict REPLACE the defaults instead of merging, so a user who
+        // zeroes a default-weighted reward doesn't get it resurrected on restart.
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public Dictionary<string, int> RitualRewardWeights = new()
+        {
+            ["+25% Tribute"] = 10,
+            ["+Favours"] = 25,
+            ["+Free Reroll"] = 20,
+            ["+Monster Packs"] = 25,
+            ["-Reroll Cost"] = 15,
+            ["Chaos Orbs x2"] = 50,
+            ["Chaos Orbs x4"] = 100,
+            ["Chaos Orbs x8"] = 200,
+            ["Greater Chaos Orbs"] = 50,
+            ["Greater Exalted Orbs"] = 5,
+            ["Divine Orb x1"] = 200,
+            ["Divine Orbs x2"] = 400,
+            ["Divine Orbs x5"] = 1000,
+            ["Orbs of Annulment"] = 300,
+            ["Perfect Orbs of Transmutation"] = 20,
+            ["Perfect Orbs of Augmentation"] = 20,
+            ["Perfect Regal Orbs"] = 200,
+            ["Perfect Exalted Orbs"] = 1000,
+            ["Perfect Chaos Orbs"] = 3000,
+            ["Alpha's Howl"] = 100,
+            ["Astramentis"] = 100,
+            ["Defiance of Destiny"] = 50,
+            ["Dream Fragments"] = 100,
+            ["Headhunter"] = 25000,
+            ["Kalandra's Touch"] = 1500,
+            ["Mageblood"] = 10000,
+            ["Original Sin"] = 50,
+            ["Queen of the Forest"] = 500,
+            ["Yoke of Suffering"] = 200,
+            ["Very Rare Unique"] = 200,
+            ["Omen: Whittling"] = 500,
+            ["Omen: the Blessed"] = 500,
+            ["Omen: Sanctification"] = 500,
+            ["Omen: Sinistral Annulment"] = 500,
+            ["Omen: Sinistral Crystallisation"] = 500,
+            ["Omen: Sinistral Erasure"] = 500,
+            ["Omen: Dextral Annulment"] = 500,
+            ["Omen: Dextral Erasure"] = 500,
+        };
+
         // Draw the atlas connection graph: a faint line along every edge between adjacent map nodes
         // (from the panel's edge list at panel+0x5A8), rendered under labels/routes on ChannelGrid.
         public bool ShowAtlasGraph = false;
