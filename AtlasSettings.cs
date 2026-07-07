@@ -87,16 +87,15 @@ namespace Atlas
         [JsonIgnore]
         public Dictionary<string, int> MapRatings = new();
 
-        // "Show Ritual mods (on hover)" — the one Rite-mod display toggle. Covers BOTH:
-        // (a) committed line nodes' actual mods (blue) — the client attaches a text child with the
-        //     localized mod lines to every line node (widget+0x3B8); we read that ready-made text
-        //     and draw it under the map name, including for fogged line nodes; and
-        // (b) PREDICTION (green): the exact mods the game WILL roll for every still-reachable
-        //     node, before you click — fully reversed client-side roll (TinyMT32 seeded by
-        //     (lineId, committedCount, candIdx, modCount), weighted reservoir over
-        //     RitualAtlasLineMods; both mods of a two-mod node). Pre-line, hover an accessible
-        //     map to preview the chain from that start. See obsidian poe2/Ritual.md.
-        // (The old separate ShowRitualMods toggle was folded into this one, 2026-07-06.)
+        // "Show Ritual mods (on hover)" — PREDICTION (green), ONLY BEFORE the first node of the
+        // Ritual atlas line is picked: hover an accessible map in line mode to preview the exact
+        // Rite-mod chain that start would roll — fully reversed client-side roll (TinyMT32 seeded
+        // by (lineId, committedCount, candIdx, modCount), weighted reservoir over
+        // RitualAtlasLineMods; both mods of a two-mod node). Once the line has a start (pending
+        // or committed) the planner window owns the route display and the green chain is
+        // suppressed. The game's own blue committed-node mod text is never drawn (removed
+        // 2026-07-07; the old separate ShowRitualMods toggle was folded in on 2026-07-06).
+        // See obsidian poe2/Ritual.md.
         public bool ShowRitualPrediction = false;
 
         // RE/DEBUG: log the deterministic Rite-mod roll ground-truth (line id + committed/pending

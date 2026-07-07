@@ -239,7 +239,6 @@ namespace Atlas
             public uint[] BadgeContentIds;  // class-2 badge content ids (badge+0x188); see re-findings §2.10.3
             public string[] ContentNames;   // resolved + filtered + de-duped display names (precomputed in cache, not per-frame)
             public StdTuple2D<int> GridPosition;
-            public string RitualModsText;   // localized Rite-mod lines when the node is on the Ritual atlas line (else null)
             public int Rating;              // 0..10 from config/mapratings.json, keyed by MapInfo.Name (-1 = unrated)
             public bool RitualSpecial;      // game's ritual reach-check refuses this node (dat-row category != 0)
         }
@@ -1306,11 +1305,7 @@ namespace Atlas
                     bool targetContent = !completed && MatchContentRoute(in nd, out contentEntry, out contentGroup);
                     bool routeTarget = targetUnique || targetLineage || targetArbiter || targetContent || doSearch;
 
-                    // A node on the Ritual atlas line always keeps its label (the Rite-mod text
-                    // hangs off it) — line nodes are mostly fogged/not-accessible, which the hide
-                    // toggles would otherwise cull. Mirrors the routeTarget override.
-                    bool ritualNode = this.RitualFeaturesOn && !string.IsNullOrEmpty(nd.RitualModsText);
-                    // A predicted candidate keeps its label too (candidates are usually fogged/not
+                    // A predicted candidate keeps its label (candidates are usually fogged/not
                     // accessible, which the hide toggles would cull).
                     string ritualPredText = null;
                     bool ritualCand = Settings.ShowRitualPrediction
@@ -1318,11 +1313,11 @@ namespace Atlas
 
                     if (!ritualShowAll)
                     {
-                        if (Settings.HideCompletedMaps && completed && !ritualNode && !ritualCand)
+                        if (Settings.HideCompletedMaps && completed && !ritualCand)
                             continue;
-                        if (Settings.HideNotAccessibleMaps && notAccessible && !routeTarget && !ritualNode && !ritualCand)
+                        if (Settings.HideNotAccessibleMaps && notAccessible && !routeTarget && !ritualCand)
                             continue;
-                        if (Settings.HideAvailableMaps && available && !routeTarget && !ritualNode && !ritualCand)
+                        if (Settings.HideAvailableMaps && available && !routeTarget && !ritualCand)
                             continue;
                     }
 
@@ -1351,10 +1346,10 @@ namespace Atlas
                         this.ritualHoverGrid = nd.GridPosition;
 
                     // Ritual focus: while the line is being drawn only rite-relevant labels draw —
-                    // committed-line mods, predicted candidates and the hovered start; every other
-                    // node label/icon is noise here. The hover hit-test above already ran, so any
-                    // accessible node still registers as the pre-click start while undrawn.
-                    if (ritualShowAll && !ritualNode && !ritualCand
+                    // predicted candidates and the hovered start; every other node label/icon is
+                    // noise here. The hover hit-test above already ran, so any accessible node
+                    // still registers as the pre-click start while undrawn.
+                    if (ritualShowAll && !ritualCand
                         && !(this.ritualHoverGrid is { } rhg && rhg.Equals(nd.GridPosition)))
                         continue;
 
@@ -1518,19 +1513,6 @@ namespace Atlas
                             bgPos.X + bgSize.X + (4f * uiScale) + pillW * 0.5f,
                             rectCenter.Y - pillH * 0.5f,
                             rBg, RatingTextColor(rBg), uiScale);
-                    }
-
-                    // Rite mods of a Ritual-line node, BELOW the map name: the game's own localized
-                    // mod lines (read from the node's text child), magic-blue like the in-game text.
-                    if (ritualNode)
-                    {
-                        var rmSize = ImGui.CalcTextSize(nd.RitualModsText);
-                        var rmPad = new Vector2(4, 2) * uiScale;
-                        var rmPos = new Vector2(rectCenter.X - rmSize.X * 0.5f,
-                            bgPos.Y + bgSize.Y + 3f * uiScale + rmPad.Y);
-                        drawList.AddRectFilled(rmPos - rmPad, rmPos + rmSize + rmPad,
-                            ImGuiHelper.Color(new Vector4(0.03f, 0.03f, 0.12f, 0.88f)), rounding);
-                        drawList.AddText(rmPos, ImGuiHelper.Color(new Vector4(0.55f, 0.55f, 1f, 1f)), nd.RitualModsText);
                     }
 
                     // Predicted Rite mod of a next-candidate node, BELOW the map name — shown BEFORE
@@ -1736,7 +1718,6 @@ namespace Atlas
                     BadgeContentIds = badgeIds,
                     ContentNames = BuildContentNames(contentTokens, badgeIds, internalId),
                     GridPosition = node.GridPosition,
-                    RitualModsText = this.RitualFeaturesOn ? GetRitualModsText(addr, f) : null,
                     Rating = GetMapRating(mapInfo),
                     RitualSpecial = this.RitualFeaturesOn && IsRitualSpecialNode(addr),
                 });
@@ -1822,7 +1803,6 @@ namespace Atlas
                     BadgeContentIds = badgeIds,
                     ContentNames = BuildContentNames(contentTokens, badgeIds, internalId),
                     GridPosition = node.GridPosition,
-                    RitualModsText = this.RitualFeaturesOn ? GetRitualModsText(addr, f) : null,
                     Rating = GetMapRating(mapInfo),
                     RitualSpecial = this.RitualFeaturesOn && IsRitualSpecialNode(addr),
                 });
@@ -1876,11 +1856,6 @@ namespace Atlas
                     var badgeIds = ToUintArray(nBadgeIds?.GetValue(map));
                     var mapName = ResolveLocalizedName(internalId, mapInfo, EffectiveLanguage);
                     var nodeAddr = (IntPtr)(nAddress.GetValue(map) ?? IntPtr.Zero);
-                    // Core's node model doesn't expose the widget flags, so the ritual-line check
-                    // costs one extra u32 read per node — only while the toggle is on.
-                    string ritualMods = this.RitualFeaturesOn && nodeAddr != IntPtr.Zero
-                        ? GetRitualModsText(nodeAddr, Read<uint>(IntPtr.Add(nodeAddr, 0x180)))
-                        : null;
                     newCache.Add(new NodeData
                     {
                         Address = nodeAddr,
@@ -1897,7 +1872,6 @@ namespace Atlas
                         BadgeContentIds = badgeIds,
                         ContentNames = BuildContentNames(tokens, badgeIds, internalId),
                         GridPosition = (StdTuple2D<int>)(nGrid.GetValue(map) ?? default(StdTuple2D<int>)),
-                        RitualModsText = ritualMods,
                         Rating = GetMapRating(mapInfo),
                         RitualSpecial = this.RitualFeaturesOn && IsRitualSpecialNode(nodeAddr),
                     });
@@ -3226,25 +3200,6 @@ namespace Atlas
             return src == IntPtr.Zero ? string.Empty : ReadWideString(src, (int)len);
         }
 
-        // Localized Rite-mod lines for a node on the Ritual atlas line; null when the node isn't
-        // on the line (flag bit 20 clear) or the game hasn't attached/filled the text child yet.
-        private static string GetRitualModsText(IntPtr nodeAddr, uint flags)
-        {
-            // Bit 20 is set on every regular map node and CLEAR on mist-shrouded ones (that is
-            // the fp difference, see AtlasMistNodeFp) — so it can't gate mist nodes; for them the
-            // +0x3B8 text-child null check below is the only discriminator.
-            bool mist = (flags & ~IsVisibleMask) == (AtlasMistNodeFp & ~IsVisibleMask);
-            if (nodeAddr == IntPtr.Zero || (!mist && (flags & RitualLineFlagMask) == 0))
-                return null;
-
-            var child = Read<IntPtr>(IntPtr.Add(nodeAddr, RitualModsChildOffset));
-            if (child == IntPtr.Zero)
-                return null;
-
-            var text = ReadGameWString(IntPtr.Add(child, TextElementTextOffset));
-            return string.IsNullOrWhiteSpace(text) ? null : text;
-        }
-
         // Session-dedup of ritual snapshots already written (signature → skip re-append).
         private readonly HashSet<string> ritualLogSeen = new();
         private bool ritualLogHeaderDone;
@@ -3660,26 +3615,26 @@ namespace Atlas
             EnsureRitualPool();
             if (ritualPool == null || ritualPool.Count == 0) return EmptyRitualPredictions;
 
+            // Hover preview ONLY, and only BEFORE the first node is picked: once the line has a
+            // start (committed, or clicked-but-unconfirmed pending), the planner window owns the
+            // route display and the always-on green chain would just be noise on the atlas.
             var committed = ReadGridVector(IntPtr.Add(panel, PanelCommittedVecOffset));
             int committedReal = committed.Count;   // before a hypothetical start is inserted
-            if (committed.Count == 0)
-            {
-                // Pre-click chain. The first click adds no randomness: lineId and the candidate
-                // table exist before the line starts, and the start node itself is never rolled
-                // (ritualLineToggleNode's empty-committed branch just adds it to pending). So the
-                // whole chain from a hypothetical start is already determined — anchor on the
-                // clicked-but-unconfirmed start (pending) when there is one, else on the hovered
-                // node. Only while the game is actually in ritual line mode.
-                if (Read<byte>(IntPtr.Add(panel, PanelLineModeOffset)) == 0)
-                    return EmptyRitualPredictions;
-                var pendingStart = ReadGridVector(IntPtr.Add(panel, PanelPendingVecOffset));
-                if (pendingStart.Count > 0)
-                    committed.Add(pendingStart[pendingStart.Count - 1]);
-                else if (this.ritualHoverGrid is { } start)
-                    committed.Add(start);
-                else
-                    return EmptyRitualPredictions;
-            }
+            if (committed.Count > 0)
+                return EmptyRitualPredictions;
+            // Pre-click chain. The first click adds no randomness: lineId and the candidate
+            // table exist before the line starts, and the start node itself is never rolled
+            // (ritualLineToggleNode's empty-committed branch just adds it to pending). So the
+            // whole chain from a hypothetical (hovered) start is already determined. Only while
+            // the game is actually in ritual line mode.
+            if (Read<byte>(IntPtr.Add(panel, PanelLineModeOffset)) == 0)
+                return EmptyRitualPredictions;
+            if (ReadGridVector(IntPtr.Add(panel, PanelPendingVecOffset)).Count > 0)
+                return EmptyRitualPredictions;
+            if (this.ritualHoverGrid is { } start)
+                committed.Add(start);
+            else
+                return EmptyRitualPredictions;
 
             uint lineId = Read<uint>(IntPtr.Add(panel, PanelLineIdOffset));
 
@@ -4691,8 +4646,13 @@ namespace Atlas
 
         private static IntPtr WalkFp(IntPtr parentAddr, uint[] fps, int gateStep, int step)
         {
+            // Terminal step: the fp triplet Panel→Gate→NodeList is NOT unique to the endgame
+            // atlas — the campaign world-map screen has a same-shaped visible branch whose leaf
+            // holds a few non-node children, and reading atlas state (e.g. the ritual line-mode
+            // byte at +0x637) off that stranger container yields garbage (planner window popping
+            // up on an act map). A real atlas node list is recognized by its children.
             if (step == fps.Length)
-                return parentAddr;
+                return HasAtlasNodeChild(parentAddr) ? parentAddr : IntPtr.Zero;
 
             var parent = Read<UiElement>(parentAddr);
             int n = parent.Length;
@@ -4727,6 +4687,28 @@ namespace Atlas
                 }
             }
             return IntPtr.Zero;
+        }
+
+        // True when the container holds at least one atlas map node (fp 0x542EF3) or mist node
+        // (fp 0x442EF3) among its first children — the leaf check that tells the real endgame
+        // atlas node list apart from same-fp-shaped containers on other world-map pages. The
+        // real list is ~470+ nodes, so scanning a small prefix is enough (and a loading-frame
+        // list with no nodes yet is correctly rejected until it fills).
+        private static bool HasAtlasNodeChild(IntPtr containerAddr)
+        {
+            var container = Read<UiElement>(containerAddr);
+            int n = Math.Min(container.Length, 64);
+            for (int i = 0; i < n; i++)
+            {
+                var childAddr = container.GetChildAddress(i);
+                if (childAddr == IntPtr.Zero)
+                    continue;
+                uint f = Read<uint>(IntPtr.Add(childAddr, 0x180)) & ~IsVisibleMask;
+                if (f == (AtlasMapNodeFp & ~IsVisibleMask) || f == (AtlasMistNodeFp & ~IsVisibleMask))
+                    return true;
+            }
+
+            return false;
         }
 
         private static bool InventoryPanel()

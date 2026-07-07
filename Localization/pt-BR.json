@@ -16,7 +16,7 @@
   "atlas.ship_icon_size": "Tamanho do ícone do navio",
   "atlas.ritual_settings": "Configurações de Ritual",
   "atlas.ritual_predict": "Mostrar mods de Ritual (ao passar o mouse)",
-  "atlas.ritual_predict_hint": "Mostra os mods de Rito da linha ritual do atlas (a linha até o Âmago do Nada): os mods do próprio jogo nos nós já confirmados (azul), mais a previsão exata dos mods (verde) que cada nó ainda alcançável VAI rolar — toda a cadeia adiante na névoa, antes do clique, incluindo quais nós recebem um segundo mod. Antes do primeiro nó, passe o mouse sobre qualquer mapa acessível no modo linha para prever toda a cadeia daquele início. Os rótulos previstos estão em inglês.",
+  "atlas.ritual_predict_hint": "Apenas enquanto o primeiro nó da linha ritual do atlas (a linha até o Âmago do Nada) ainda não foi escolhido: passe o mouse sobre um mapa acessível no modo linha para prever (verde, sob os nomes dos mapas) a cadeia exata de mods de Rito que aquele início VAI rolar, incluindo quais nós recebem um segundo mod. Depois que a linha começa, a prévia é desligada; acompanhe as rotas na janela do planejador. Os rótulos previstos estão em inglês.",
   "atlas.ritual_planner": "Janela do planejador Head of the king",
   "atlas.ritual_planner_hint": "Abre uma janela enquanto o atlas está no modo de desenho de linha listando cada caminho possível da linha a partir de cada mapa inicial possível, com a cadeia de recompensas prevista de cada um. Escolha as recompensas desejadas no filtro suspenso (um caminho aparece se QUALQUER uma delas estiver na sua cadeia); marque um caminho para destacar sua rota no atlas e traçar um raio até seu primeiro mapa. Fechar a janela com X também desmarca esta caixa.",
   "atlas.ritual_weights": "Pesos das recompensas",

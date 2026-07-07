@@ -16,7 +16,7 @@
   "atlas.ship_icon_size": "Ship icon size",
   "atlas.ritual_settings": "Ritual Settings",
   "atlas.ritual_predict": "Show Ritual mods (on hover)",
-  "atlas.ritual_predict_hint": "Shows the Rite mods of the Ritual atlas line (the line drawn to the Crux of Nothingness): the game's own mods on committed line nodes (blue), plus the exact predicted mods (green) every still-reachable node WILL roll — the whole look-ahead chain into the fog, before you click, including which nodes get a second mod. Before the first node is placed, hover any accessible map in line mode to preview the whole chain that start would give. Predicted labels are in English.",
+  "atlas.ritual_predict_hint": "Only before the first node of the Ritual atlas line (the line to the Crux of Nothingness) is picked: hover an accessible map in line mode to preview (green, under the map names) the exact Rite-mod chain that start WILL roll, including which nodes get a second mod. Once the line is started the preview turns off; use the planner window to follow routes. Predicted labels are in English.",
   "atlas.ritual_planner": "Head of the king planner window",
   "atlas.ritual_planner_hint": "Opens a window while the atlas is in line-drawing mode listing every path the line could take from every possible start map, with the predicted reward chain for each. Pick desired rewards in the filter dropdown (a path shows if ANY of them is in its chain); tick a path to highlight its route on the atlas and draw a ray to its first map. Closing the window with X also clears this checkbox.",
   "atlas.ritual_weights": "Reward weights",
