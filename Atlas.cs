@@ -1034,8 +1034,6 @@ namespace Atlas
 
             var drawList = ImGui.GetBackgroundDrawList();
 
-            drawList.ChannelsSplit(4);
-
             var atlasPanelAddr = GetAtlasPanelAddress();
             var atlasUi = atlasPanelAddr == IntPtr.Zero ? default : Read<UiElement>(atlasPanelAddr);
             if (!atlasUi.IsVisible)
@@ -1088,7 +1086,6 @@ namespace Atlas
             {
                 // cacheFrameCounter is left past the threshold (not incremented) so a re-enable
                 // triggers a fresh read on the very next frame instead of waiting an interval.
-                drawList.ChannelsMerge();
                 return;
             }
 
@@ -1142,6 +1139,9 @@ namespace Atlas
                     if (inventoryPanel)
                         return;
 
+                // Split only after every early-exit guard. Leaving an ImDrawList split when the
+                // atlas is hidden corrupts ImGui's native draw state and can terminate the host.
+                using var channelScope = new DrawListChannelScope(drawList, 4);
                 // ── Route planning (shortest hops over the revealed atlas edges) ──────────
                 // Built once per frame when a routed target is wanted: the edge graph from
                 // panel+0x5A8, screen centers for on-screen nodes, the impassable set (failed
@@ -1612,7 +1612,6 @@ namespace Atlas
                     drawList.AddCircle(routeAnchor, r, DotOutlineColor, 0, MathF.Max(1f, r * 0.35f));
                 }
 
-                drawList.ChannelsMerge();
             }
 
             // Tooltip for the content marker under the cursor — drawn after the FontScaleScope so the
@@ -3006,6 +3005,22 @@ namespace Atlas
             {
                 ImGui.PopFont();
                 _font.Scale = _prevScale;
+            }
+        }
+
+        private readonly struct DrawListChannelScope : IDisposable
+        {
+            private readonly ImDrawListPtr drawList;
+
+            public DrawListChannelScope(ImDrawListPtr drawList, int channelCount)
+            {
+                this.drawList = drawList;
+                this.drawList.ChannelsSplit(channelCount);
+            }
+
+            public void Dispose()
+            {
+                this.drawList.ChannelsMerge();
             }
         }
 
