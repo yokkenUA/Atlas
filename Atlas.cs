@@ -3026,8 +3026,13 @@ namespace Atlas
             }
             public void Dispose()
             {
-                ImGui.PopFont();
+                // Order MIRRORS the ctor and must not be swapped: PopFont() re-binds the previous
+                // font through SetCurrentFont, which recomputes its size from font->Scale. Popping
+                // while the scale is still multiplied bakes OUR scale into the restored context, so
+                // everything drawn afterwards -- GameHelper's own windows included -- came out
+                // resized. Restore the shared font's scale first, then pop.
                 _font.Scale = _prevScale;
+                ImGui.PopFont();
             }
         }
 
