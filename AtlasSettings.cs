@@ -204,7 +204,9 @@ namespace Atlas
         // hops are counted from the accessible frontier, which is scattered over the whole atlas, so
         // a map on the far side of the world routinely reads as 0-3 hops and its marker would send
         // you across the map forever. Screen distance also scales with zoom for free. 0 = unlimited.
-        public float ModMarkerRange = 2f;
+        // Default 5: tuned in game — it still reaches the next cluster or two while dropping the
+        // markers that used to point across the whole atlas.
+        public float ModMarkerRange = 5f;
 
         // Map Content route groups: user-defined sets of content types. For each content type a route
         // line is drawn from the accessible frontier to the nearest node carrying it (color/thickness/
