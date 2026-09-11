@@ -194,19 +194,23 @@ namespace Atlas
         public Dictionary<string, ContentOverride> ContentOverrides = [];
         public Dictionary<byte, ContentOverride> BiomeOverrides = [];
 
-        // Expedition-mod markers: an enabled "Expedition mods" entry whose map is off-screen gets a
-        // pill pinned to the screen edge in its direction ("[hops] <mod>"); once that map scrolls
-        // into view the same pill sits under its name without the hop count. Off = neither is drawn.
-        public bool ShowModEdgeMarkers = true;
+        // Off-screen content pointer, section-wide over ALL Target-farming groups: when a map an
+        // enabled entry routes to is off-screen, a pill is pinned to the screen edge in its direction
+        // ("[hops] <target>"); once that map scrolls into view the same pill sits under its name
+        // without the hop count (skipped for entries that route to a named map, where it would only
+        // repeat the name). Off = neither half is drawn.
+        // NB renamed from ShowModEdgeMarkers/ModMarkerRange when the feature stopped being Expedition-
+        // only, so a config written before that falls back to these defaults for these two values.
+        public bool ShowOffscreenContentPointer = true;
 
-        // How far from the current view an off-screen mod marker may point, measured in SCREENS
-        // (1 = the map sits at most one screen outside the view). Screen distance rather than hops:
-        // hops are counted from the accessible frontier, which is scattered over the whole atlas, so
-        // a map on the far side of the world routinely reads as 0-3 hops and its marker would send
-        // you across the map forever. Screen distance also scales with zoom for free. 0 = unlimited.
+        // How far from the current view an off-screen pointer may reach, measured in SCREENS (1 = the
+        // map sits at most one screen outside the view). Screen distance rather than hops: hops are
+        // counted from the accessible frontier, which is scattered over the whole atlas, so a map on
+        // the far side of the world routinely reads as 0-3 hops and its pointer would send you across
+        // the map forever. Screen distance also scales with zoom for free. 0 = unlimited.
         // Default 5: tuned in game — it still reaches the next cluster or two while dropping the
-        // markers that used to point across the whole atlas.
-        public float ModMarkerRange = 5f;
+        // pointers that used to aim across the whole atlas.
+        public float OffscreenPointerRange = 5f;
 
         // Map Content route groups: user-defined sets of content types. For each content type a route
         // line is drawn from the accessible frontier to the nearest node carrying it (color/thickness/

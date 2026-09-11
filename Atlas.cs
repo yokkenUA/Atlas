@@ -886,6 +886,33 @@ namespace Atlas
         private void DrawMapContentSettings()
         {
             {
+                // Section-wide, above the group editor: the off-screen pointer serves EVERY group in
+                // Target farming, so it can't live inside one of them.
+                bool pointer = Settings.ShowOffscreenContentPointer;
+                if (ImGui.Checkbox(this.L("atlas.offscreen_pointer", "Off-screen content pointer"), ref pointer))
+                    Settings.ShowOffscreenContentPointer = pointer;
+                ImGuiHelper.ToolTip(this.L("atlas.offscreen_pointer_hint",
+                    "While a map that an enabled entry below routes to is off-screen, pin a pointer to the screen " +
+                    "edge in its direction, labelled \"[hops] target\". Scroll that way and once the map is on " +
+                    "screen the pointer settles under its name without the hop count — skipped for entries that " +
+                    "route to a named map, where the map's own name is already the label. Only the nearest map per " +
+                    "target and screen edge gets a pointer.\n\n" +
+                    "A pointer needs a real route: a map with no path from your accessible maps, or one farther " +
+                    "than the entry's hop limit, gets none. Needs \"Route lines through nodes\"."));
+
+                if (Settings.ShowOffscreenContentPointer)
+                {
+                    ImGui.SetNextItemWidth(180);
+                    float pointerRange = Settings.OffscreenPointerRange;
+                    if (ImGui.SliderFloat(this.L("atlas.offscreen_range", "Off-screen range (screens)"), ref pointerRange, 0f, 10f, "%.1f"))
+                        Settings.OffscreenPointerRange = MathF.Max(0f, pointerRange);
+                    ImGuiHelper.ToolTip(this.L("atlas.offscreen_range_hint",
+                        "How far outside the view a pointer may reach, in screens (0 = no limit). The hop count " +
+                        "can't do this job: hops are counted from your accessible maps, which are scattered over " +
+                        "the whole atlas, so a map on the far side of the world reads as 0-3 hops just like the " +
+                        "one next door — its pointer would send you scrolling forever."));
+                }
+
                 ImGui.InputTextWithHint("##ContentGroupName", this.L("atlas.hint_group_name", "group name"), ref Settings.ContentGroupNameInput, 256);
                 ImGui.SameLine();
                 if (ImGui.Button(this.L("atlas.add_content_group", "Add content group")))
@@ -915,34 +942,6 @@ namespace Atlas
                         grp.DrawPaths = drawPaths;
                     ImGuiHelper.ToolTip(this.L("atlas.draw_paths_hint", "Master switch for this group: when off, no route is drawn for any of its content, " +
                         "but each entry keeps its own 'route' checkbox unchanged."));
-
-                    // Expedition-mod markers belong to that preset only, so the toggle lives in it.
-                    if (string.Equals(grp.Key, ExpeditionModsGroupKey, StringComparison.Ordinal))
-                    {
-                        bool edgeMarkers = Settings.ShowModEdgeMarkers;
-                        if (ImGui.Checkbox($"{this.L("atlas.mod_edge_markers", "Off-screen mod markers")}##CGM{gi}", ref edgeMarkers))
-                            Settings.ShowModEdgeMarkers = edgeMarkers;
-                        ImGuiHelper.ToolTip(this.L("atlas.mod_edge_markers_hint",
-                            "While a map carrying an enabled modifier is off-screen, pin a marker to the screen " +
-                            "edge in its direction, labelled \"[hops] modifier\". Scroll that way and once the map " +
-                            "is on screen the same marker sits under its name, without the hop count. Only the " +
-                            "nearest map per modifier and screen edge gets a marker.\n\n" +
-                            "A marker needs a real route: a map with no path from your accessible maps, or one " +
-                            "farther than the entry's hop limit, gets none. Needs \"Route lines through nodes\"."));
-
-                        if (Settings.ShowModEdgeMarkers)
-                        {
-                            ImGui.SetNextItemWidth(180);
-                            float range = Settings.ModMarkerRange;
-                            if (ImGui.SliderFloat($"{this.L("atlas.mod_marker_range", "Marker range (screens)")}##CGMR{gi}", ref range, 0f, 10f, "%.1f"))
-                                Settings.ModMarkerRange = MathF.Max(0f, range);
-                            ImGuiHelper.ToolTip(this.L("atlas.mod_marker_range_hint",
-                                "How far outside the view a marker may point, in screens (0 = no limit). The hop " +
-                                "count can't do this job: hops are counted from your accessible maps, which are " +
-                                "scattered over the whole atlas, so a map on the far side of the world reads as 0-3 " +
-                                "hops just like the one next door — its marker would send you scrolling forever."));
-                        }
-                    }
 
                     // One line thickness for all entries in the group, shown right under "Draw paths".
                     ImGui.SetNextItemWidth(180);
@@ -1368,9 +1367,9 @@ namespace Atlas
                         routeGraph ?? BuildConnectionGraph(atlasPanelAddr));
 
                 var pendingRoutes = new List<(List<StdTuple2D<int>> path, uint color, float thickness)>();
-                // Off-screen Expedition-mod targets collected during the node pass, drawn as edge
-                // markers after it (see DrawModEdgeMarkers). Empty while the toggle is off.
-                var modMarkers = new List<(Vector2 Target, int Hops, string Label, Vector4 Color)>();
+                // Off-screen Target-farming targets collected during the node pass, drawn as edge
+                // pointers after it (see DrawOffscreenPointers). Empty while the toggle is off.
+                var offscreenPointers = new List<(Vector2 Target, int Hops, string Label, Vector4 Color)>();
 
                 this.ritualHoverGrid = null;
                 foreach (var nd in nodeCache)
@@ -1464,19 +1463,25 @@ namespace Atlas
                     bool shouldDrawSearch = Settings.DrawLinesSearchQuery && doSearch
                         && searchList.Any(searchTerm => mapName.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
                         && boundsSearch.Contains(new PointF(drawPosition.X, drawPosition.Y));
-                    // Expedition-mod route (a "stat:" entry): these also get the off-screen edge marker
-                    // and the under-name chip, which plain content and map targets don't. Declared out
-                    // here because both consumers sit past the route block.
-                    bool modRoute = false;
-                    int modHops = -1;
+                    // Off-screen pointer state for this node. Declared out here because both consumers
+                    // (the edge pointer and the under-name chip) sit past the route block.
+                    //   pointerRoute — this node is the target of an enabled Target-farming entry;
+                    //   pointerChip  — the under-name chip would ADD something. It wouldn't for an
+                    //                  entry that routes to a named map ("id:"/"name:"), where the
+                    //                  chip would just repeat the map name already drawn above it.
+                    bool pointerRoute = false;
+                    bool pointerChip = false;
+                    int pointerHops = -1;
                     if (shouldDrawSearch || targetContent || targetUnique || targetLineage || targetArbiter)
                     {
                         // Content routes carry their own colour/thickness/hop-limit; search takes
                         // precedence over a content match on the same node.
                         bool contentRoute = targetContent && !shouldDrawSearch;
-                        modRoute = contentRoute && Settings.ShowModEdgeMarkers
-                            && contentEntry.Match is { Length: > 0 } cm
-                            && cm.StartsWith(StatMatchPrefix, StringComparison.OrdinalIgnoreCase);
+                        pointerRoute = contentRoute && Settings.ShowOffscreenContentPointer;
+                        pointerChip = pointerRoute
+                            && !(contentEntry.Match is { Length: > 0 } cm
+                                 && (cm.StartsWith("id:", StringComparison.OrdinalIgnoreCase)
+                                     || cm.StartsWith("name:", StringComparison.OrdinalIgnoreCase)));
                         uint lineColor = shouldDrawSearch ? SearchLineColor
                             : contentRoute ? ImGuiHelper.Color(contentEntry.LineColor)
                             : targetUnique ? UniqueLineColor
@@ -1505,7 +1510,7 @@ namespace Atlas
                             {
                                 pendingRoutes.Add((path, lineColor, thickness));
                                 int hops = path.Count - 1;
-                                modHops = hops;   // the "[N]" the off-screen mod marker shows
+                                pointerHops = hops;   // the "[N]" the off-screen pointer shows
 
                                 // Green dot on the accessible entry node (where you start running).
                                 if (routeCenters.TryGetValue(path[0], out var startC))
@@ -1549,21 +1554,22 @@ namespace Atlas
                         }
                     }
 
-                    // A mod marker is only as good as the route behind it: modHops stays -1 when the
+                    // A pointer is only as good as the route behind it: pointerHops stays -1 when the
                     // route pass found no path at all (the map's region isn't connected to the
                     // accessible frontier — e.g. it sits across the fog) or when the entry's hop limit
                     // suppressed it. Both used to keep their marker, just without the "[N]", which is
                     // how markers ended up pointing at unreachable maps deep in the fog and at sea maps
-                    // from the other side of the atlas while standing on land. No route → no marker.
-                    modRoute &= modHops >= 0;
+                    // from the other side of the atlas while standing on land. No route → no pointer.
+                    pointerRoute &= pointerHops >= 0;
+                    pointerChip &= pointerRoute;
 
                     if (!screenBounds.IntersectsWith(new RectangleF(bgPos.X, bgPos.Y, bgSize.X, bgSize.Y)))
                     {
-                        // The map is off-screen: its label is culled, but an enabled Expedition mod
-                        // still gets a marker pinned to the screen edge in its direction, so the mod
-                        // can be found by scrolling towards it instead of sweeping the whole atlas.
-                        if (modRoute)
-                            modMarkers.Add((nodeCenter, modHops, ContentEntryDisplayName(contentEntry), contentEntry.LineColor));
+                        // The map is off-screen: its label is culled, but an enabled Target-farming
+                        // entry still gets a pointer pinned to the screen edge in its direction, so the
+                        // target can be found by scrolling towards it instead of sweeping the atlas.
+                        if (pointerRoute)
+                            offscreenPointers.Add((nodeCenter, pointerHops, ContentEntryDisplayName(contentEntry), contentEntry.LineColor));
                         continue;
                     }
 
@@ -1600,11 +1606,11 @@ namespace Atlas
                     drawList.AddRectFilled(bgPos, bgPos + bgSize, ImGuiHelper.Color(backgroundColor), rounding);
                     drawList.AddText(drawPosition, ImGuiHelper.Color(fontColor), mapName);
 
-                    // The map is on screen, so the mod marker that led here settles UNDER its name and
-                    // drops the hop count — same pill, same colour as the edge marker it came from.
-                    if (modRoute)
+                    // The map is on screen, so the pointer that led here settles UNDER its name and
+                    // drops the hop count — same pill, same colour as the edge pointer it came from.
+                    if (pointerChip)
                         DrawPill(drawList, ContentEntryDisplayName(contentEntry), rectCenter.X,
-                            bgPos.Y + bgSize.Y + 2f * uiScale, ModMarkerBackground, contentEntry.LineColor, uiScale);
+                            bgPos.Y + bgSize.Y + 2f * uiScale, OffscreenPointerBackground, contentEntry.LineColor, uiScale);
 
                     // DEBUG/RE: node child-index badge, sitting to the LEFT of the name and vertically
                     // centered against it, so a node called out by number is easy to find on-screen.
@@ -1714,12 +1720,12 @@ namespace Atlas
                     }
                 }
 
-                // Off-screen Expedition-mod markers, after the routes so the pills sit on top of the
-                // lines that run under them.
-                if (modMarkers.Count > 0)
+                // Off-screen content pointers, after the routes so the pills sit on top of the lines
+                // that run under them.
+                if (offscreenPointers.Count > 0)
                 {
                     drawList.ChannelsSetCurrent(ChannelLabels);
-                    DrawModEdgeMarkers(drawList, modMarkers, uiScale, Settings.ModMarkerRange);
+                    DrawOffscreenPointers(drawList, offscreenPointers, uiScale, Settings.OffscreenPointerRange);
                 }
 
                 // Selected "Head of the King Rewards" chains: ray to each chain's start + highlighted
@@ -3288,19 +3294,21 @@ namespace Atlas
             }
         }
 
-        // Shared background for both halves of a mod marker (edge pill and under-name chip), so the
-        // pill the user followed to the edge is visibly the same pill once it lands on the map.
-        private static readonly Vector4 ModMarkerBackground = new(0.05f, 0.05f, 0.05f, 0.85f);
+        // Shared background for both halves of a pointer (edge pill and under-name chip), so the pill
+        // the user followed to the edge is visibly the same pill once it lands on the map.
+        private static readonly Vector4 OffscreenPointerBackground = new(0.05f, 0.05f, 0.05f, 0.85f);
 
-        // Off-screen Expedition-mod compass: one pill per (mod, screen edge), pinned where the line
-        // from the screen centre to that map crosses the screen border, labelled "[hops] <mod>".
+        // Off-screen Target-farming compass: one pill per (target, screen edge), pinned where the line
+        // from the screen centre to that map crosses the screen border, labelled "[hops] <target>".
         // Scroll that way and the map eventually comes on screen, where the node pass draws the same
-        // pill under its name without the hop count.
+        // pill under its name without the hop count. Serves every group in the section — content
+        // entries, map targets and Expedition modifiers alike; the label is whatever the entry shows
+        // in the settings row.
         //
-        // Only the NEAREST map of a given mod on a given edge gets a pill: an enabled mod with a dozen
-        // matches off-screen would otherwise line the whole border with duplicates of one word, and
-        // the nearest is the one worth walking to anyway.
-        private static void DrawModEdgeMarkers(ImDrawListPtr drawList,
+        // Only the NEAREST map of a given target on a given edge gets a pill: an enabled entry with a
+        // dozen matches off-screen would otherwise line the whole border with duplicates of one word,
+        // and the nearest is the one worth walking to anyway.
+        private static void DrawOffscreenPointers(ImDrawListPtr drawList,
             List<(Vector2 Target, int Hops, string Label, Vector4 Color)> markers, float uiScale, float range)
         {
             var display = ImGui.GetIO().DisplaySize;
@@ -3319,7 +3327,7 @@ namespace Atlas
             // Range gate. The hop count can NOT stand in for distance here: hops are measured from the
             // accessible frontier, and with ~170 accessible maps scattered over the whole atlas a map
             // on the opposite side of the world reads as 0-3 hops just like the one next door. Without
-            // this gate the markers pointed at maps hundreds of grid units away and "led into the fog
+            // this gate the pointers aimed at maps hundreds of grid units away and "led into the fog
             // forever". Distance is taken in screens, which scales with the atlas zoom for free.
             if (range > 0f)
             {
@@ -3382,7 +3390,7 @@ namespace Atlas
                 }
 
                 placed.Add(new RectangleF(cx - w * 0.5f, top, w, pillH));
-                DrawPill(drawList, label, cx, top, ModMarkerBackground, m.Color, uiScale);
+                DrawPill(drawList, label, cx, top, OffscreenPointerBackground, m.Color, uiScale);
             }
         }
 
