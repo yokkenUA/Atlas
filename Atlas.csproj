@@ -39,6 +39,9 @@
     <None Update="json\maps.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="json\expeditionmods.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="json\mapratings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
@@ -61,7 +64,7 @@
 
   <Target Name="CopyFiles" AfterTargets="Build">
     <Copy SourceFiles="$(OutDir)$(TargetName)$(TargetExt);$(OutDir)$(TargetName).pdb;" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(OutDir)json\biome.json;$(OutDir)json\content.json;$(OutDir)json\mapcontent.json;$(OutDir)json\maps.json;$(OutDir)json\mapratings.json;$(OutDir)json\ritualmods.json" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)\json" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OutDir)json\biome.json;$(OutDir)json\content.json;$(OutDir)json\mapcontent.json;$(OutDir)json\maps.json;$(OutDir)json\mapratings.json;$(OutDir)json\ritualmods.json;$(OutDir)json\expeditionmods.json" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)\json" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(OutDir)fonts\DejaVuSans.ttf;$(OutDir)fonts\unifont.ttf" DestinationFolder="..\..\GameHelper\$(OutDir)Plugins\$(ProjectName)\fonts" SkipUnchangedFiles="true" />
     <ItemGroup>
       <DeployIcons Include="$(OutDir)icons\*.png" />

@@ -194,6 +194,11 @@ namespace Atlas
         public Dictionary<string, ContentOverride> ContentOverrides = [];
         public Dictionary<byte, ContentOverride> BiomeOverrides = [];
 
+        // Expedition-mod markers: an enabled "Expedition mods" entry whose map is off-screen gets a
+        // pill pinned to the screen edge in its direction ("[hops] <mod>"); once that map scrolls
+        // into view the same pill sits under its name without the hop count. Off = neither is drawn.
+        public bool ShowModEdgeMarkers = true;
+
         // Map Content route groups: user-defined sets of content types. For each content type a route
         // line is drawn from the accessible frontier to the nearest node carrying it (color/thickness/
         // hop-limit per entry). Persisted in settings.txt. See docs/re-findings.md §2.10.5.
@@ -241,6 +246,11 @@ namespace Atlas
         // Built-in group: can't be deleted and its content list is fixed (the preset). Per-entry
         // colour/hops/draw toggle and the group master toggle stay editable.
         public bool Locked { get; set; } = false;
+        // Which built-in preset this locked group is ("maptargets" / "expeditionmods"). Needed once
+        // there is more than one locked group, so each preset reconciles against its own group
+        // instead of the first locked one it finds. Empty on a group saved before the key existed —
+        // EnsureBuiltInContentGroups treats such a group as the map-targets preset.
+        public string Key { get; set; } = string.Empty;
         // Group-level line thickness, shown under "Draw paths". Used (for all entries) by the built-in
         // group instead of per-entry thickness; user groups keep their per-entry thickness.
         public float LineThickness { get; set; } = 1f;
