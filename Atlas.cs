@@ -926,7 +926,9 @@ namespace Atlas
                             "While a map carrying an enabled modifier is off-screen, pin a marker to the screen " +
                             "edge in its direction, labelled \"[hops] modifier\". Scroll that way and once the map " +
                             "is on screen the same marker sits under its name, without the hop count. Only the " +
-                            "nearest map per modifier and screen edge gets a marker."));
+                            "nearest map per modifier and screen edge gets a marker.\n\n" +
+                            "A marker needs a real route: a map with no path from your accessible maps, or one " +
+                            "farther than the entry's hop limit, gets none. Needs \"Route lines through nodes\"."));
                     }
 
                     // One line thickness for all entries in the group, shown right under "Draw paths".
@@ -1533,6 +1535,14 @@ namespace Atlas
                             drawList.AddCircle(endDot, thickness, DotOutlineColor, 0, MathF.Max(1f, thickness * 0.35f));
                         }
                     }
+
+                    // A mod marker is only as good as the route behind it: modHops stays -1 when the
+                    // route pass found no path at all (the map's region isn't connected to the
+                    // accessible frontier — e.g. it sits across the fog) or when the entry's hop limit
+                    // suppressed it. Both used to keep their marker, just without the "[N]", which is
+                    // how markers ended up pointing at unreachable maps deep in the fog and at sea maps
+                    // from the other side of the atlas while standing on land. No route → no marker.
+                    modRoute &= modHops >= 0;
 
                     if (!screenBounds.IntersectsWith(new RectangleF(bgPos.X, bgPos.Y, bgSize.X, bgSize.Y)))
                     {
