@@ -199,6 +199,13 @@ namespace Atlas
         // into view the same pill sits under its name without the hop count. Off = neither is drawn.
         public bool ShowModEdgeMarkers = true;
 
+        // How far from the current view an off-screen mod marker may point, measured in SCREENS
+        // (1 = the map sits at most one screen outside the view). Screen distance rather than hops:
+        // hops are counted from the accessible frontier, which is scattered over the whole atlas, so
+        // a map on the far side of the world routinely reads as 0-3 hops and its marker would send
+        // you across the map forever. Screen distance also scales with zoom for free. 0 = unlimited.
+        public float ModMarkerRange = 2f;
+
         // Map Content route groups: user-defined sets of content types. For each content type a route
         // line is drawn from the accessible frontier to the nearest node carrying it (color/thickness/
         // hop-limit per entry). Persisted in settings.txt. See docs/re-findings.md §2.10.5.

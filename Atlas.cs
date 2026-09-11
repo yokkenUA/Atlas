@@ -929,6 +929,19 @@ namespace Atlas
                             "nearest map per modifier and screen edge gets a marker.\n\n" +
                             "A marker needs a real route: a map with no path from your accessible maps, or one " +
                             "farther than the entry's hop limit, gets none. Needs \"Route lines through nodes\"."));
+
+                        if (Settings.ShowModEdgeMarkers)
+                        {
+                            ImGui.SetNextItemWidth(180);
+                            float range = Settings.ModMarkerRange;
+                            if (ImGui.SliderFloat($"{this.L("atlas.mod_marker_range", "Marker range (screens)")}##CGMR{gi}", ref range, 0f, 10f, "%.1f"))
+                                Settings.ModMarkerRange = MathF.Max(0f, range);
+                            ImGuiHelper.ToolTip(this.L("atlas.mod_marker_range_hint",
+                                "How far outside the view a marker may point, in screens (0 = no limit). The hop " +
+                                "count can't do this job: hops are counted from your accessible maps, which are " +
+                                "scattered over the whole atlas, so a map on the far side of the world reads as 0-3 " +
+                                "hops just like the one next door — its marker would send you scrolling forever."));
+                        }
                     }
 
                     // One line thickness for all entries in the group, shown right under "Draw paths".
@@ -1706,7 +1719,7 @@ namespace Atlas
                 if (modMarkers.Count > 0)
                 {
                     drawList.ChannelsSetCurrent(ChannelLabels);
-                    DrawModEdgeMarkers(drawList, modMarkers, uiScale);
+                    DrawModEdgeMarkers(drawList, modMarkers, uiScale, Settings.ModMarkerRange);
                 }
 
                 // Selected "Head of the King Rewards" chains: ray to each chain's start + highlighted
@@ -3288,7 +3301,7 @@ namespace Atlas
         // matches off-screen would otherwise line the whole border with duplicates of one word, and
         // the nearest is the one worth walking to anyway.
         private static void DrawModEdgeMarkers(ImDrawListPtr drawList,
-            List<(Vector2 Target, int Hops, string Label, Vector4 Color)> markers, float uiScale)
+            List<(Vector2 Target, int Hops, string Label, Vector4 Color)> markers, float uiScale, float range)
         {
             var display = ImGui.GetIO().DisplaySize;
             if (display.X < 1f || display.Y < 1f)
@@ -3303,8 +3316,30 @@ namespace Atlas
             // Nearest first: with several pills competing for one spot the closest map keeps the
             // exact edge point and the others stack away from it. Unknown hops (-1, no route computed
             // this frame) sort last.
-            markers.Sort((a, b) => (a.Hops < 0 ? int.MaxValue : a.Hops)
-                .CompareTo(b.Hops < 0 ? int.MaxValue : b.Hops));
+            // Range gate. The hop count can NOT stand in for distance here: hops are measured from the
+            // accessible frontier, and with ~170 accessible maps scattered over the whole atlas a map
+            // on the opposite side of the world reads as 0-3 hops just like the one next door. Without
+            // this gate the markers pointed at maps hundreds of grid units away and "led into the fog
+            // forever". Distance is taken in screens, which scales with the atlas zoom for free.
+            if (range > 0f)
+            {
+                float halfW = MathF.Max(1f, display.X * 0.5f);
+                float halfH = MathF.Max(1f, display.Y * 0.5f);
+                markers.RemoveAll(m =>
+                {
+                    float dx = (m.Target.X - center.X) / halfW;
+                    float dy = (m.Target.Y - center.Y) / halfH;
+                    return MathF.Sqrt(dx * dx + dy * dy) > range;
+                });
+                if (markers.Count == 0)
+                    return;
+            }
+
+            // Nearest ON SCREEN first, so when several pills want one spot the map you'd actually
+            // scroll to keeps the exact edge point and the rest stack away from it. (Sorting by hops
+            // would hand the slot to whichever map happens to sit next to an accessible one.)
+            markers.Sort((a, b) => Vector2.DistanceSquared(a.Target, center)
+                .CompareTo(Vector2.DistanceSquared(b.Target, center)));
 
             float pillH = 18f * uiScale;
             float step = pillH + 3f * uiScale;
